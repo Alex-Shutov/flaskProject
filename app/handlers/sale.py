@@ -9,12 +9,12 @@ bot = get_bot_instance()
 
 @bot.message_handler(func=lambda message: message.text == '#Продажа')
 def handle_sale(message):
-
+    chat_id = message.chat.id
     user_access = check_user_access(message.from_user.username)
     if not user_access or UserRole.MANAGER.value not in user_access[2]:
         bot.reply_to(message, "У вас нет доступа к этой функции.")
         return
-    chat_id = message.chat.id
+    user_state = load_user_state(chat_id)
     if chat_id in user_state:
         delete_user_state(chat_id)
         
@@ -103,18 +103,22 @@ def ask_for_sale_type(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('sale_'))
 def sale_type_callback(call):
+    print('-----------')
     chat_id = call.message.chat.id
     sale_type = call.data.split('_')[1]
     user_id=call.from_user.username
+    message_id = call.message.message_id
     save_param_to_redis(chat_id, 'sale_type', sale_type)
-    finalize_order(chat_id,user_id)
+    if sale_type == "direct":
+        finalize_order(chat_id, user_id,message_id)
+    elif sale_type == "avito":
+        from .avito import handle_avito_photo
+        handle_avito_photo(call.message)
 
 
-def finalize_order(chat_id, username):
+def finalize_order(chat_id, username,message_id):
     # Загружаем состояние пользователя из Redis
     order_data = load_user_state(chat_id)
-    print('------------------------')
-    print(order_data)
     if order_data:
         param_id = order_data.get("param_id")
         product_id = order_data.get("product_id")
@@ -134,13 +138,12 @@ def finalize_order(chat_id, username):
 
             manager_id, manager_name, manager_username = manager_info
 
-            order_id = create_order(product_id, param_id, gift, note, sale_type, manager_id)
+            order_id = create_order(product_id, param_id, gift, note, sale_type, manager_id,message_id)
 
             product_name, product_param = get_product_info(product_id, param_id)
 
             order_message = format_order_message(order_id, product_name, product_param, gift, note, sale_type,
                                                  manager_name, manager_username)
-
             bot.send_message(chat_id, order_message)
             bot.send_message(CHANNEL_CHAT_ID, order_message)
 

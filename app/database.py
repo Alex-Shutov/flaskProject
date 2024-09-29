@@ -43,14 +43,14 @@ def get_product_params(product_id):
             cursor.execute("SELECT id, size FROM product_params WHERE product_id = %s", (product_id,))
             return cursor.fetchall()
 
-def create_order(product_id, param_id, gift, note, sale_type, manager_id):
+def create_order(product_id, param_id, gift, note, sale_type, manager_id,message_id = None,avito_photo = None):
     with get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute("""
-                INSERT INTO orders (product_id, product_param_id, gift, note, order_type, manager_id, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                INSERT INTO orders (product_id, product_param_id, gift, note, order_type, manager_id,avito_photo,message_id, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s,%s,%s, NOW())
                 RETURNING id
-            """, (product_id, param_id, gift, note, sale_type, manager_id))
+            """, (product_id, param_id, gift, note, sale_type, manager_id,avito_photo,message_id))
             order_id = cursor.fetchone()[0]
             conn.commit()
             return order_id
@@ -63,3 +63,12 @@ def get_product_info(product_id, param_id):
             cursor.execute("SELECT size FROM product_params WHERE id = %s", (param_id,))
             product_param = cursor.fetchone()[0]
             return product_name, product_param
+def get_couriers():
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT id, name, username, telegram_id 
+                FROM users 
+                WHERE 'Courier' = ANY(role)  -- Проверяем, если роль 'Courier' присутствует в массиве ролей
+            """)
+            return cursor.fetchall()

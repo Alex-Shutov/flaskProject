@@ -1,1 +1,1 @@
-from . import start, sale, delivery
+from . import avito, start, sale, delivery
