@@ -1,7 +1,8 @@
 from flask import Flask, request
-from telebot import types
+from telebot import types,custom_filters
 from config import BOT_TOKEN, WEBHOOK_URL, DEBUG, PORT
 from bot import get_bot_instance
+from telebot.states.sync.middleware import StateMiddleware
 import handlers
 
 app = Flask(__name__)
@@ -26,9 +27,12 @@ def remove_webhook():
     return "Webhook removed", 200
 
 if __name__ == '__main__':
-    print(1234)
     # Проверяем, установлен ли вебхук
     webhook_info = bot.get_webhook_info()
+    bot.add_custom_filter(custom_filters.StateFilter(bot))
+
+
+    bot.setup_middleware(StateMiddleware(bot))
     if webhook_info.url:
         print(f"Бот работает через вебхук: {webhook_info.url}")
         app.run(debug=DEBUG, port=PORT)
@@ -36,4 +40,3 @@ if __name__ == '__main__':
         print("Вебхук не установлен. Запуск бота в режиме long polling.")
         # bot.remove_webhook()
         bot.polling( none_stop=True)
-        print(12345)

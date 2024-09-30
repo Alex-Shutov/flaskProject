@@ -34,22 +34,8 @@ def escape_markdown_v2(text):
     return re.sub(r'([_*[\]()~`>#+\-=|{}.!])', r'\\\1', text)
 
 def format_order_message(order_id, product_name, product_param, gift, note, sale_type, manager_name, manager_username):
-    formatted_order_id = escape_markdown_v2(str(order_id).zfill(4))  # Экранирование для MarkdownV2
+    formatted_order_id = str(order_id).zfill(4)  # Экранирование для MarkdownV2
     order_message = f"Заказ #{formatted_order_id}ㅤ\n\n"
-    order_message += f"Тип продажи: {escape_markdown_v2(SaleTypeRu[sale_type.lower()].value)}\n\n"
-    order_message += f"{escape_markdown_v2(product_name)} {escape_markdown_v2(product_param)}\n\n"
-    if gift:
-        order_message += f"🎁 Подарок: {escape_markdown_v2(gift)}\n\n"
-    if note:
-        order_message += f"📝 Заметка: {escape_markdown_v2(note)}\n\n"
-    order_message += f"Менеджер: {escape_markdown_v2(manager_name)} {escape_markdown_v2(manager_username)}"
-    return order_message
-
-
-def format_order_message_with_entities(order_id, product_name, product_param, gift, note, sale_type, manager_name,
-                                       manager_username):
-    formatted_order_id = str(order_id).zfill(4)
-    order_message = f"#Заказㅤ{formatted_order_id}\n\n"
     order_message += f"Тип продажи: {SaleTypeRu[sale_type.lower()].value}\n\n"
     order_message += f"{product_name} {product_param}\n\n"
     if gift:
@@ -57,17 +43,8 @@ def format_order_message_with_entities(order_id, product_name, product_param, gi
     if note:
         order_message += f"📝 Заметка: {note}\n\n"
     order_message += f"Менеджер: {manager_name} {manager_username}"
+    return order_message
 
-    # Рассчитываем offset и length для хештега
-    hashtag = f"#Заказㅤ{formatted_order_id}"
-    utf16_offset, utf16_length = utf16_offset_length(order_message, hashtag)
-
-    # Создаем entity для хештега
-    entities = [
-        types.MessageEntity(type="hashtag", offset=utf16_offset, length=utf16_length)
-    ]
-
-    return order_message, entities
 
 def save_photo_and_resize(photo, order_id):
     directory = "avito_photos/"
