@@ -3,8 +3,8 @@ from bot import get_bot_instance, get_user_state
 from states import DirectStates as SaleStates, AvitoStates
 from config import CHANNEL_CHAT_ID
 from telebot.states.sync.context import StateContext
-from database import check_user_access, get_products, get_product_params, create_order, get_manager_info, get_product_info
-from utils import UserRole, format_order_message
+from database import check_user_access, get_products, get_product_params, create_order, get_user_info, get_product_info
+from app_types import UserRole
 from redis_client import save_user_state, load_user_state, delete_user_state
 
 
@@ -25,7 +25,6 @@ def handle_sale(message,state:StateContext):
     #     state.delete()
 
     # state = bot.get_state(message.chat.id)
-    print('state')
     state.set(SaleStates.product_id)
 
     products = get_products()
@@ -162,7 +161,7 @@ def finalize_order(chat_id, username, message_id, state: StateContext):
                 return
 
             try:
-                manager_info = get_manager_info(username)
+                manager_info = get_user_info(username)
                 if not manager_info:
                     bot.send_message(chat_id, "Не удалось получить информацию о менеджере.")
                     return

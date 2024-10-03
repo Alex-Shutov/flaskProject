@@ -2,13 +2,14 @@ from telebot import types
 from bot import get_bot_instance
 from database import check_user_access
 from utils import get_available_buttons
-
+import handlers.manager
+import handlers.courier
 bot = get_bot_instance()
 
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    print(99)
+    print('123')
     user_access = check_user_access(message.from_user.username)
 
     if not user_access:

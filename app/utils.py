@@ -1,32 +1,19 @@
 from telebot import types
-from enum import Enum
 from PIL import Image
+from database import get_product_info
 import os
 import io
 import re
 
-class UserRole(Enum):
-    MANAGER = 'Manager'
-    COURIER = 'Courier'
-    ADMIN = 'Admin'
-    OWNER = 'Owner'
+from app_types import SaleTypeRu,UserRole
 
-class SaleType(Enum):
-    DIRECT='direct'
-    DELIVERY='delivery'
-    AVITO='avito'
-
-class SaleTypeRu(Enum):
-    direct='Прямая'
-    delivery='Доставка'
-    avito='Авито'
 
 def get_available_buttons(roles):
     buttons = []
     if UserRole.MANAGER.value in roles or UserRole.ADMIN.value in roles or UserRole.OWNER.value in roles:
         buttons.append(types.KeyboardButton("#Продажа"))
     if UserRole.COURIER.value in roles or UserRole.ADMIN.value in roles or UserRole.OWNER.value in roles:
-        buttons.append(types.KeyboardButton("#Доставка"))
+        buttons.append(types.KeyboardButton("#Заказы"))
     return buttons
 
 def escape_markdown_v2(text):
@@ -77,3 +64,42 @@ def utf16_offset_length(text, substring):
     utf16_length = len(utf16_substring) // 2
 
     return utf16_offset, utf16_length
+
+
+def format_order_message_for_courier(order):
+
+    order_id = order.get('id')
+    product_id = order.get('product_id')
+    product_param_id = order.get('product_param_id')
+    gift = order.get('gift', 'Не указано')
+    note = order.get('note', 'Нет примечаний')
+    order_type = order.get('order_type')
+    status = order.get('status')
+
+    # Допустим, что у тебя есть функция для получения имени продукта и параметра по их ID
+    product_name, product_param = get_product_info(product_id, product_param_id)
+
+    # Форматируем сообщение
+    message = (
+        f"🆔 Заказ: #{order_id}\n"
+        f"📦 Продукт: {product_name} (Параметр: {product_param})\n"
+        f"🎁 Подарок: {gift}\n"
+        f"📝 Примечание: {note}\n"
+        f"🔄 Тип продажи: {order_type}\n"
+        f"📊 Статус: {status}\n"
+    )
+
+    # Если есть фото, добавляем информацию о фото
+    if 'avito_photo' in order and order['avito_photo']:
+        message += "📷 Фото: прикреплено\n"
+
+    return message
+
+
+def extract_order_number(caption):
+    # Ищем паттерн, который соответствует символу '#' и цифрам сразу после него
+    match = re.search(r"#(\d+)", caption)
+    if match:
+        # Преобразуем строку в целое число
+        return int(match.group(1))
+    return None

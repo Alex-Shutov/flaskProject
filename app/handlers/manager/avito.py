@@ -1,14 +1,13 @@
 import uuid
 from telebot import types
 from bot import get_bot_instance
-from states import AvitoStates as SaleStates,DirectStates
-from utils import UserRole, format_order_message, save_photo_and_resize
-from database import check_user_access, get_products, get_product_params, create_order, get_manager_info, get_product_info,get_couriers
-from handlers.sale import save_param_to_redis
+from states import AvitoStates as SaleStates,DirectStates,CourierStates
+from utils import format_order_message, save_photo_and_resize
+from database import check_user_access, get_products, get_product_params, create_order, get_user_info, get_product_info,get_couriers
 from redis_client import save_user_state, load_user_state, delete_user_state
 from telebot.states.sync.context import StateContext
 from config import CHANNEL_CHAT_ID
-
+from handlers.courier.courier import notify_couriers
 
 
 bot = get_bot_instance()
@@ -43,13 +42,8 @@ def handle_avito_photo(message: types.Message,state:StateContext):
 
 def finalize_avito_order(chat_id, message_id, state: StateContext):
     """Финализируем заказ для Авито, включая фото и ответ на сообщение в канале."""
-
-    # Работаем с состоянием через контекстный менеджер
-    print('data')
-    print(state.data())
     with state.data() as order_data:
         if order_data:
-            print(order_data)
             param_id = order_data.get("param_id")
             product_id = order_data.get("product_id")
             gift = order_data.get("gift")
@@ -63,12 +57,12 @@ def finalize_avito_order(chat_id, message_id, state: StateContext):
                 return
 
             try:
-                manager_info = get_manager_info('ni3omi')
+                manager_info = get_user_info('ni3omi')
                 if not manager_info:
                     bot.send_message(chat_id, "Не удалось получить информацию о менеджере.")
                     return
 
-                manager_id, manager_name, manager_username = manager_info
+                manager_id, manager_name, manager_username = manager_info.get('id'), manager_info.get('name'), manager_info.get('username')
 
                 # Создаем заказ в БД и получаем order_id
                 order_id = create_order(product_id, param_id, gift, note, sale_type, manager_id, message_id,
@@ -81,20 +75,18 @@ def finalize_avito_order(chat_id, message_id, state: StateContext):
                 )
 
                 # Отправляем сообщение с фото в основной канал и сохраняем message_id для ответа
-                sent_message = bot.send_photo(CHANNEL_CHAT_ID, open(avito_photo, 'rb'), caption=order_message)
+                bot.send_photo(CHANNEL_CHAT_ID, open(avito_photo, 'rb'), caption=order_message)
 
-                # Сохраняем reply_to_message_id (ID сообщения)
-                reply_to_message_id = sent_message.message_id
-
-                # Сохраняем reply_to_message_id в базе данных или Redis для использования в будущем
-                save_param_to_redis(chat_id, 'reply_to_message_id', reply_to_message_id)
+                # Обновляем состояние с сообщением и фото для курьеров
+                state.set(SaleStates.avito_message)
+                state.add_data(avito_photo=avito_photo)
+                state.add_data(avito_message=order_message)
 
                 # Отправляем сообщение в личный чат
                 bot.send_message(chat_id, order_message)
 
-                # Удаляем состояние после завершения заказа
-                delete_user_state(chat_id)
-                state.delete()
+                # Уведомляем курьеров сразу после обновления состояния
+                notify_couriers(message=None, state=state)
 
             except Exception as e:
                 bot.send_message(chat_id, f"Произошла ошибка при оформлении заказа: {str(e)}")
@@ -114,8 +106,14 @@ def notify_order_completion(order_id, courier_name, courier_username, photo_path
         bot.send_photo(chat_id, open(photo_path, 'rb'), caption=completion_message, reply_to_message_id=reply_to_message_id)
     else:
         bot.send_message(chat_id, f"Не удалось найти сообщение о заказе #{order_id} для ответа.")
-def notify_couriers(order_message, avito_photo):
-    couriers = get_couriers()  # Получаем список пользователей с ролью Courier
-    for courier in couriers:
-        bot.send_photo(courier['telegram_id'], open(avito_photo, 'rb'), caption=order_message)
-        bot.send_message(courier['telegram_id'], "Нажмите 'Принять заказ', чтобы взять заказ.")
+
+
+# def notify_couriers(order_message, avito_photo):
+#     couriers = get_couriers()  # Получаем список пользователей с ролью Courier
+#     print(couriers)
+#     print('couriers')
+#     for courier in couriers:
+#         markup = types.InlineKeyboardMarkup()
+#         markup.add(types.InlineKeyboardButton("Принять заказ", callback_data=f"accept_order_{courier['telegram_id']}"))
+#
+#         # bot.send_photo(courier['telegram_id'], open(avito_photo, 'rb'), caption=order_message, reply_markup=markup)

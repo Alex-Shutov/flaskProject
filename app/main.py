@@ -3,7 +3,7 @@ from telebot import types,custom_filters
 from config import BOT_TOKEN, WEBHOOK_URL, DEBUG, PORT
 from bot import get_bot_instance
 from telebot.states.sync.middleware import StateMiddleware
-import handlers
+import handlers.start
 
 app = Flask(__name__)
 bot = get_bot_instance()
