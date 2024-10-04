@@ -12,9 +12,9 @@ class SaleType(Enum):
     AVITO='avito'
 
 class SaleTypeRu(Enum):
-    direct='Прямая'
-    delivery='Доставка'
-    avito='Авито'
+    DIRECT='Прямая'
+    DELIVERY='Доставка'
+    AVITO='Авито'
 
 class OrderType(Enum):
     ACTIVE='active'

@@ -41,12 +41,28 @@ def get_user_info(username):
                 'telegram_id': user_info[3],
                 'roles':user_info[4]
             }
-
-def get_products():
+def get_product_type():
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT id, name FROM products")
+            cursor.execute("SELECT id,title from type_product")
             return cursor.fetchall()
+
+
+def get_products(type_id=None):
+    """Возвращает список продуктов. Если передан тип, фильтрует по нему."""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            if type_id:
+                # Если type_id передан, фильтруем по нему
+                query = "SELECT id, name FROM products WHERE type_id = %s"
+                cursor.execute(query, (type_id))
+            else:
+                # Если type_id не передан, выводим все продукты
+                query = "SELECT id, name FROM products"
+                cursor.execute(query)
+
+            return cursor.fetchall()
+
 
 def get_product_params(product_id):
     with get_connection() as conn:
@@ -65,6 +81,19 @@ def create_order(product_id, param_id, gift, note, sale_type, manager_id,message
             order_id = cursor.fetchone()[0]
             conn.commit()
             return order_id
+
+def update_order_message_id(order_id, message_id):
+    """Обновляет message_id для заказа в базе данных."""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            query = """
+                UPDATE orders
+                SET message_id = %s
+                WHERE id = %s
+            """
+            cursor.execute(query, (message_id, order_id))
+            conn.commit()
+
 
 def get_product_info(product_id, param_id):
     with get_connection() as conn:
@@ -96,7 +125,7 @@ def get_orders(order_type=None, username=None, status=None, is_courier_null=Fals
         with conn.cursor() as cursor:
             # Строим запрос динамически
             query = """
-                SELECT o.id, o.product_id, o.product_param_id, o.gift, o.note, o.order_type, o.status
+                SELECT o.id, o.product_id, o.product_param_id, o.gift, o.note, o.order_type, o.status, o.created_at, o.manager_id, o.message_id, o.avito_photo
                 FROM orders o
                 WHERE 1=1
             """
@@ -105,13 +134,13 @@ def get_orders(order_type=None, username=None, status=None, is_courier_null=Fals
             params = []
 
             # Фильтруем по типу заказа (если указан)
-            if order_type:
-                query += " AND o.order_type = %s"
+            if order_type and isinstance(order_type, list):
+                query += " AND o.order_type = ANY(%s)"
                 params.append(order_type)
 
             # Фильтруем по нескольким статусам, если передан список статусов
             if status and isinstance(status, list):
-                query += " AND o.status = ANY(%s)"
+                query += " AND o.status = ANY(%s::public.status_order[])"
                 params.append(status)
 
             # Фильтруем по курьеру (если указан username)
@@ -129,6 +158,22 @@ def get_orders(order_type=None, username=None, status=None, is_courier_null=Fals
             if is_courier_null:
                 query += " AND o.courier_id IS NULL"
 
+            if order_type and isinstance(order_type, list):
+                query += " ORDER BY CASE"
+                for idx, o_type in enumerate(order_type):
+                    query += f" WHEN o.order_type = %s THEN {idx}"
+                    params.append(o_type)
+                query += " END"
+
+                # Добавляем сортировку по порядку в массиве status, если она не включена в сортировку order_type
+            if status and isinstance(status, list):
+                query += ", CASE"
+                for idx, st in enumerate(status):
+                    query += f" WHEN o.status = %s THEN {idx}"
+                    params.append(st)
+                query += " END"
+
+            query += ", o.id ASC"
             # Выполняем запрос с динамическими параметрами
             cursor.execute(query, tuple(params))
             orders = cursor.fetchall()
@@ -142,7 +187,12 @@ def get_orders(order_type=None, username=None, status=None, is_courier_null=Fals
                     'gift': order[3],
                     'note': order[4],
                     'order_type': order[5],
-                    'status': order[6]
+                    'status': order[6],
+                    'created_at':order[7],
+                    'manager_id':order[8],
+                    'message_id':order[9],
+                    'avito_photo':order[10]
+
                 }
                 for order in orders
             ]
@@ -153,7 +203,7 @@ def get_orders(order_type=None, username=None, status=None, is_courier_null=Fals
 def update_order_status(order_id, status):
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("UPDATE orders SET status = %s WHERE id = %s", (status, order_id))
+            cursor.execute("UPDATE orders SET status = %s::public.status_order WHERE id = %s", (status, order_id))
             conn.commit()
 
 def get_product_by_id(product_id):
@@ -231,4 +281,15 @@ def update_order_courier(order_id, courier_id):
             conn.commit()
 
 
+def update_order_invoice_photo(order_id, photo_path):
+    """Обновляет путь к фотографии накладной в заказе."""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            query = """
+                UPDATE orders
+                SET invoice_photo = %s
+                WHERE id = %s
+            """
+            cursor.execute(query, (photo_path, order_id))
+            conn.commit()
 

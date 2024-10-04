@@ -1,5 +1,7 @@
 from telebot import types
 from PIL import Image
+
+from app_types import OrderType, OrderTypeRu
 from database import get_product_info
 import os
 import io
@@ -23,7 +25,7 @@ def escape_markdown_v2(text):
 def format_order_message(order_id, product_name, product_param, gift, note, sale_type, manager_name, manager_username):
     formatted_order_id = str(order_id).zfill(4)  # Экранирование для MarkdownV2
     order_message = f"Заказ #{formatted_order_id}ㅤ\n\n"
-    order_message += f"Тип продажи: {SaleTypeRu[sale_type.lower()].value}\n\n"
+    order_message += f"Тип продажи: {SaleTypeRu[sale_type.upper()].value}\n\n"
     order_message += f"{product_name} {product_param}\n\n"
     if gift:
         order_message += f"🎁 Подарок: {gift}\n\n"
@@ -78,15 +80,16 @@ def format_order_message_for_courier(order):
 
     # Допустим, что у тебя есть функция для получения имени продукта и параметра по их ID
     product_name, product_param = get_product_info(product_id, product_param_id)
+    formatted_order_id = str(order_id).zfill(4)  # Экранирование для MarkdownV2
 
     # Форматируем сообщение
     message = (
-        f"🆔 Заказ: #{order_id}\n"
-        f"📦 Продукт: {product_name} (Параметр: {product_param})\n"
+        f"🆔 Заказ: #{formatted_order_id}ㅤ\n\n"
+        f"📦 {product_name} {product_param}\n\n"
         f"🎁 Подарок: {gift}\n"
-        f"📝 Примечание: {note}\n"
-        f"🔄 Тип продажи: {order_type}\n"
-        f"📊 Статус: {status}\n"
+        f"📝 Примечание: {note}\n\n"
+        f"🔄 Тип продажи: {SaleTypeRu[order_type.upper()].value}\n\n"
+        f"📊 Статус: {OrderTypeRu[status.upper()].value}\n"
     )
 
     # Если есть фото, добавляем информацию о фото

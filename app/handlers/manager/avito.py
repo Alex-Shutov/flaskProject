@@ -3,7 +3,7 @@ from telebot import types
 from bot import get_bot_instance
 from states import AvitoStates as SaleStates,DirectStates,CourierStates
 from utils import format_order_message, save_photo_and_resize
-from database import check_user_access, get_products, get_product_params, create_order, get_user_info, get_product_info,get_couriers
+from database import check_user_access, get_products, get_product_params, create_order, get_user_info, get_product_info,get_couriers,update_order_message_id
 from redis_client import save_user_state, load_user_state, delete_user_state
 from telebot.states.sync.context import StateContext
 from config import CHANNEL_CHAT_ID
@@ -20,8 +20,6 @@ bot = get_bot_instance()
 
 @bot.message_handler(state=SaleStates.avito_photo, content_types=['photo'])
 def handle_avito_photo(message: types.Message,state:StateContext):
-    print(message)
-    print('message avito')
     chat_id = message.chat.id
     message_id = message.message_id
     if message.photo:
@@ -75,12 +73,18 @@ def finalize_avito_order(chat_id, message_id, state: StateContext):
                 )
 
                 # Отправляем сообщение с фото в основной канал и сохраняем message_id для ответа
-                bot.send_photo(CHANNEL_CHAT_ID, open(avito_photo, 'rb'), caption=order_message)
+                sent_message = bot.send_photo(CHANNEL_CHAT_ID, open(avito_photo, 'rb'), caption=order_message)
+
+                reply_message_id = sent_message.message_id
+
+                update_order_message_id(order_id, reply_message_id)
 
                 # Обновляем состояние с сообщением и фото для курьеров
                 state.set(SaleStates.avito_message)
                 state.add_data(avito_photo=avito_photo)
+                state.add_data(order_id=order_id)
                 state.add_data(avito_message=order_message)
+                state.add_data(reply_message_id=reply_message_id)
 
                 # Отправляем сообщение в личный чат
                 bot.send_message(chat_id, order_message)

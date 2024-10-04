@@ -3,10 +3,10 @@ from bot import get_bot_instance, get_user_state
 from states import DirectStates as SaleStates, AvitoStates
 from config import CHANNEL_CHAT_ID
 from telebot.states.sync.context import StateContext
-from database import check_user_access, get_products, get_product_params, create_order, get_user_info, get_product_info
+from database import check_user_access, get_products, get_product_params, create_order, get_user_info, get_product_info,get_product_type
 from app_types import UserRole
 from redis_client import save_user_state, load_user_state, delete_user_state
-
+from utils import format_order_message
 
 # Инициализация хранилища состояний
 bot = get_bot_instance()
@@ -16,8 +16,9 @@ bot = get_bot_instance()
 @bot.message_handler(func=lambda message: message.text == '#Продажа')
 def handle_sale(message,state:StateContext):
     chat_id = message.chat.id
-    user_access = check_user_access(message.from_user.username)
-    if not user_access or UserRole.MANAGER.value not in user_access[2]:
+    with state.data() as data:
+        user_info = data.get('user_info')
+    if not user_info or UserRole.MANAGER.value not in user_info['roles']:
         bot.reply_to(message, "У вас нет доступа к этой функции.")
         return
     # user_state = load_user_state(chat_id)
@@ -25,22 +26,37 @@ def handle_sale(message,state:StateContext):
     #     state.delete()
 
     # state = bot.get_state(message.chat.id)
+    state.set(SaleStates.type_product)
+
+    product_types = get_product_type()
+    print(product_types)
+    print('product_types')
+    markup = types.InlineKeyboardMarkup()
+    for product_type in product_types:
+        markup.add(types.InlineKeyboardButton(product_type[1], callback_data=f"type_product_{product_type[0]}"))
+    bot.send_message(chat_id, "Выберите тип:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('type_product_'), state=SaleStates.type_product)
+def handle_product_sale(call: types.CallbackQuery,state:StateContext):
+    # user_state = load_user_state(chat_id)
+    # if chat_id in user_state:
+    #     state.delete()
+    type_id = call.data.split('_')[2]
+    # state = bot.get_state(message.chat.id)
     state.set(SaleStates.product_id)
 
-    products = get_products()
+    products = get_products(type_id)
+    print(products)
+    print('products')
     markup = types.InlineKeyboardMarkup()
     for product in products:
         markup.add(types.InlineKeyboardButton(product[1], callback_data=f"product_{product[0]}"))
-    bot.send_message(message.chat.id, "Выберите продукт:", reply_markup=markup)
-
-
-
-
+    bot.send_message(call.message.chat.id, "Выберите продукт:", reply_markup=markup)
 
 @bot.callback_query_handler(state=SaleStates.product_id, func=lambda call: call.data.startswith('product_'))
 def handle_product_selection(call: types.CallbackQuery,state:StateContext):
     product_id = call.data.split('_')[1]
-
+    print(1234)
     # Сохраняем выбранный продукт в состоянии
     state.add_data(product_id=product_id)
 
@@ -148,7 +164,6 @@ def finalize_order(chat_id, username, message_id, state: StateContext):
 
     # Работаем с данными через контекстный менеджер
     with state.data() as order_data:
-        print(order_data)
         if order_data:
             param_id = order_data.get("param_id")
             product_id = order_data.get("product_id")
