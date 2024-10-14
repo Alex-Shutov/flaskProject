@@ -2,6 +2,7 @@ import uuid
 from telebot import types
 from bot import get_bot_instance
 from states import AvitoStates as SaleStates,DirectStates,CourierStates
+from telebot.types import ReplyParameters
 from utils import format_order_message, save_photo_and_resize
 from database import check_user_access, get_products, get_product_params, create_order, get_user_info, get_product_info,get_couriers,update_order_message_id
 from redis_client import save_user_state, load_user_state, delete_user_state
@@ -9,6 +10,19 @@ from telebot.states.sync.context import StateContext
 from config import CHANNEL_CHAT_ID
 from handlers.courier.courier import notify_couriers
 
+from database import get_all_users
+
+from database import update_order_status
+
+from app_types import OrderType
+from database import update_order_packer
+
+from app_types import UserRole
+
+from database import get_product_info_with_params
+
+from states import AvitoStates
+from utils import is_valid_command
 
 bot = get_bot_instance()
 
@@ -32,10 +46,21 @@ def handle_avito_photo(message: types.Message,state:StateContext):
 
         # Сохраняем путь к фото в базе данных
         state.add_data(avito_photo=photo_path)
-
-        finalize_avito_order(chat_id,message_id,state)
+        state.set(AvitoStates.total_price)
+        # finalize_avito_order(chat_id,message_id,state)
     else:
         bot.send_message(chat_id, "Пожалуйста, загрузите страницу заказа с Авито")
+
+@bot.message_handler(state=AvitoStates.total_price)
+def handle_total_price(message:types.Message,state:StateContext):
+    if not is_valid_command(message.text, state): return
+    try:
+        total_amount = float(message.text)
+        state.add_data(total_price=total_amount)
+        # Завершаем процесс оформления заказа
+        finalize_avito_order(message.chat.id, message.message_id, state)
+    except ValueError:
+        bot.send_message(message.chat.id, "Некорректный формат суммы. Пожалуйста, введите число.")
 
 
 def finalize_avito_order(chat_id, message_id, state: StateContext):
@@ -48,6 +73,8 @@ def finalize_avito_order(chat_id, message_id, state: StateContext):
             note = order_data.get("note")
             sale_type = "avito"
             avito_photo = order_data.get("avito_photo")
+            packer_id = order_data.get("pack_id")
+            total_price = order_data.get("total_price")
 
             if not all([param_id, product_id, sale_type, avito_photo]):
                 bot.send_message(chat_id,
@@ -62,15 +89,36 @@ def finalize_avito_order(chat_id, message_id, state: StateContext):
 
                 manager_id, manager_name, manager_username = manager_info.get('id'), manager_info.get('name'), manager_info.get('username')
 
+                product_info = get_product_info_with_params(product_id)
+                param_type = product_info.get("param_parameters", {}).get("Тип", None)
+
+                need_to_pack = param_type and param_type.lower() == 'Китай'.lower()
+
+                if packer_id==manager_id:
+                    order_status = OrderType.IN_PACKING.value
+                elif not packer_id and need_to_pack==True:
+                    order_status = OrderType.ACTIVE.value
+                else:
+                    order_status = OrderType.READY_TO_DELIVERY.value
+
                 # Создаем заказ в БД и получаем order_id
                 order_id = create_order(product_id, param_id, gift, note, sale_type, manager_id, message_id,
-                                        avito_photo)
+                                        avito_photo, packer_id, order_status)
+
+
 
                 product_name, product_param = get_product_info(product_id, param_id)
 
+                # Формируем сообщение с информацией о заказе
+                if packer_id == manager_id:
+                    pack_message = f"Упакует {manager_name} ({manager_username})"
+                elif order_status==OrderType.ACTIVE.value:
+                    pack_message = "Упаковщик еще не выбран"
+                else: pack_message="Не требует упаковки"
+
                 order_message = format_order_message(
                     order_id, product_name, product_param, gift, note, sale_type, manager_name, manager_username
-                )
+                ) + f"\n\n{pack_message}"
 
                 # Отправляем сообщение с фото в основной канал и сохраняем message_id для ответа
                 sent_message = bot.send_photo(CHANNEL_CHAT_ID, open(avito_photo, 'rb'), caption=order_message)
@@ -88,36 +136,58 @@ def finalize_avito_order(chat_id, message_id, state: StateContext):
 
                 # Отправляем сообщение в личный чат
                 bot.send_message(chat_id, order_message)
-
-                # Уведомляем курьеров сразу после обновления состояния
-                notify_couriers(message=None, state=state)
-
+                if not packer_id and order_status==OrderType.ACTIVE.value:
+                    # Если упаковщик не выбран, оповещаем всех пользователей
+                    notify_all_users(order_message, order_id,reply_message_id,state)
+                else:
+                    # Уведомляем курьеров сразу после обновления состояния
+                    notify_couriers(order_message,avito_photo,reply_message_id, state=state)
+                state.delete()
             except Exception as e:
                 bot.send_message(chat_id, f"Произошла ошибка при оформлении заказа: {str(e)}")
         else:
             bot.send_message(chat_id, "Произошла ошибка при оформлении заказа. Пожалуйста, попробуйте снова.")
 
 
-def notify_order_completion(order_id, courier_name, courier_username, photo_path):
-    """Уведомляем канал о завершении заказа, отвечая на сообщение с заказом."""
-    # Загружаем reply_to_message_id из базы данных или Redis
-    chat_id = CHANNEL_CHAT_ID
-    reply_to_message_id = load_user_state(order_id).get('reply_to_message_id')
+def notify_all_users(order_message, order_id,message_to_reply,state):
+    state.delete()
+    users = get_all_users([UserRole.MANAGER.value,UserRole.COURIER.value,UserRole.ADMIN.value])
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Взять в упаковку", callback_data=f"pack_order_{order_id}_{message_to_reply}"))
 
-    if reply_to_message_id:
-        # Отправляем ответ на сообщение о заказе в канал с прикрепленной накладной
-        completion_message = f"Заказ #{order_id}\nАвито продажа реализована\nНакладная:"
-        bot.send_photo(chat_id, open(photo_path, 'rb'), caption=completion_message, reply_to_message_id=reply_to_message_id)
-    else:
-        bot.send_message(chat_id, f"Не удалось найти сообщение о заказе #{order_id} для ответа.")
+    for user in users:
+        bot.send_message(user['telegram_id'], order_message, reply_markup=markup)
 
 
-# def notify_couriers(order_message, avito_photo):
-#     couriers = get_couriers()  # Получаем список пользователей с ролью Courier
-#     print(couriers)
-#     print('couriers')
-#     for courier in couriers:
-#         markup = types.InlineKeyboardMarkup()
-#         markup.add(types.InlineKeyboardButton("Принять заказ", callback_data=f"accept_order_{courier['telegram_id']}"))
-#
-#         # bot.send_photo(courier['telegram_id'], open(avito_photo, 'rb'), caption=order_message, reply_markup=markup)
+@bot.callback_query_handler(func=lambda call: call.data.startswith('pack_order_'))
+def handle_pack_order(call: types.CallbackQuery):
+    order_id = call.data.split('_')[2]
+    message_to_reply = call.data.split('_')[3]
+    user_info = get_user_info(call.from_user.username)
+
+    if user_info:
+        update_order_packer(order_id, user_info['id'])
+        update_order_status(order_id, OrderType.IN_PACKING.value)
+
+        # Проверяем, есть ли в сообщении фото (caption)
+        if call.message.photo:
+            # Меняем описание под фото
+            bot.edit_message_caption(
+                f"Вы выбрали упаковать заказ #{str(order_id).zfill(4)}ㅤ\nДанный заказ вы сможете найти по кнопке \"Упаковать товар\"",
+                message_id=call.message.message_id,
+                chat_id=call.message.chat.id
+            )
+        else:
+            # Меняем текст сообщения
+            bot.edit_message_text(
+                f"Вы выбрали упаковать заказ #{str(order_id).zfill(4)}ㅤ\nДанный заказ вы сможете найти по кнопке \"Упаковать товар\"",
+                message_id=call.message.message_id,
+                chat_id=call.message.chat.id
+            )
+        reply_params = ReplyParameters(message_id=int(message_to_reply))
+        # Отправляем сообщение в канал
+        bot.send_message(
+            CHANNEL_CHAT_ID,
+            f"Заказ #{str(order_id).zfill(4)}ㅤ принят в упаковку \nУпакует {user_info['name']} ({user_info['username']})",
+            reply_parameters=reply_params,
+        )
