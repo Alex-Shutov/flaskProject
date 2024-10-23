@@ -39,6 +39,11 @@ from utils import set_admin_commands
 from database import get_order_by_id
 from utils import format_order_message_for_courier
 
+from handlers.manager.avito import finalize_avito_order
+from handlers.manager.sale import finalize_order
+
+from utils import create_media_group
+
 bot = get_bot_instance()
 
 @bot.message_handler(commands=['restart'])
@@ -101,6 +106,7 @@ def handle_orders(message: types.Message, state: StateContext):
 
     state.set(AppStates.picked_action)
     bot.send_message(message.chat.id, "Выберите действие:", reply_markup=markup)
+
 @bot.callback_query_handler(func=lambda call: call.data == 'orders_pack')
 def handle_orders_pack(call: types.CallbackQuery,state: StateContext):
     markup = types.InlineKeyboardMarkup()
@@ -164,29 +170,33 @@ def show_packed_orders(call: types.CallbackQuery, state: StateContext):
                                              user_info['username'])
         bot.send_message(call.message.chat.id, order_message)
 
-
 @bot.callback_query_handler(func=lambda call: call.data == 'orders_pack_goods', state=AppStates.picked_action)
-def show_active_orders_without_packer(call: types.CallbackQuery, state: StateContext):
+def show_active_ordxers_without_packer(call: types.CallbackQuery, state: StateContext):
     orders = get_active_orders_without_packer()
     user_info = get_user_by_username(call.from_user.username, state)
+
     if not orders:
         bot.send_message(call.message.chat.id, "Нет активных заказов без упаковщика.")
         return
 
     for order in orders:
-        product_name, product_param = get_product_info(order['product_id'], order['product_param_id'])
-        order_message = format_order_message(order['id'],product_name ,product_param,
-                                             order['gift'], order['note'], order['order_type'],
-                                             user_info['name'], user_info['username'])
-        order_message += '\n\n Без упаковщика'
+        order_message = format_order_message(
+            order_id=order['id'],
+            product_list=order['products'],
+            gift=order['gift'],
+            note=order['note'],
+            sale_type=order['order_type'],
+            manager_name=user_info['name'],
+            manager_username=user_info['username'],
+            avito_boxes=order['avito_boxes']
+        )
+        print(order['message_id'])
+        print('reply')
+        order_message += '\n\nБез упаковщика'
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("Взять в упаковку", callback_data=f"pack_order_{order['id']}_{order['message_id']}"))
 
-        if order['avito_photo']:
-             bot.send_photo(call.message.chat.id, open(order['avito_photo'], 'rb'), caption=order_message,
-                           reply_markup=markup)
-        else:
-             bot.send_message(call.message.chat.id, order_message, reply_markup=markup)
+        bot.send_message(call.message.chat.id, order_message, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'orders_in_packing')
 def show_packing_orders(call: types.CallbackQuery, state: StateContext):
@@ -243,3 +253,17 @@ def handle_packed_order(call: types.CallbackQuery, state: StateContext):
     notify_couriers(order_message, open(order_data['avito_photo']),message_to_reply, state)
 
     bot.answer_callback_query(call.id, "Заказ успешно упакован.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'confirm_final_order')
+def confirm_final_order(call: types.CallbackQuery, state: StateContext):
+    with state.data() as data:
+        sale_type = data.get('sale_type')
+
+    # В зависимости от типа заказа вызываем соответствующую финализирующую функцию
+    if sale_type == "avito":
+        finalize_avito_order(call.message.chat.id,call.message.message_id ,call.message.json['chat']['username'], state)
+    else:
+        finalize_order(call.message.chat.id, call.from_user.username, call.message.message_id, state)
+
+    bot.answer_callback_query(call.id)

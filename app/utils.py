@@ -3,11 +3,16 @@ from datetime import datetime
 from telebot import types
 from PIL import Image
 
+from app_types import SaleType
+from bot import get_bot_instance
 from app_types import OrderType, OrderTypeRu
 from database import get_product_info
 import os
 import io
 import re
+from io import BytesIO
+from telebot.types import InputMediaPhoto
+
 
 from app_types import SaleTypeRu,UserRole
 
@@ -24,27 +29,37 @@ def escape_markdown_v2(text):
     """Экранирует специальные символы для MarkdownV2."""
     return re.sub(r'([_*[\]()~`>#+\-=|{}.!])', r'\\\1', text)
 
-def format_order_message(order_id, product_name, product_param, gift, note, sale_type,
+
+def format_order_message(order_id, product_list, gift, note, sale_type,
                          manager_name, manager_username, delivery_date=None,
                          delivery_time=None, delivery_address=None, delivery_note=None,
-                         contact_phone=None, contact_name=None, total_price=None):
+                         contact_phone=None, contact_name=None, total_price=None, avito_boxes = None):
     formatted_order_id = str(order_id).zfill(4)  # Экранирование для MarkdownV2
     order_message = f"Заказ #{formatted_order_id}ㅤ\n\n"
-    order_message += f"Тип продажи: {sale_type}\n\n"
-    order_message += f"Продукт: 🌲 {product_name} {product_param}\n"
+    order_message += f"Тип продажи: {SaleTypeRu[sale_type.upper()].value}\n\n"
+
+    # Добавляем продукты в сообщение
+    for product in product_list:
+        emoji = "📦 " if product['is_main_product'] else "➕ "
+        order_message += f"{emoji} Продукт: {product['product_name']} {product['param_title']}\n\n"
+
     if gift:
-        order_message += f"Подарок: 🎁 {gift}\n\n"
+        order_message += f"🎁 Подарок: {gift}\n\n"
+
+    if sale_type == SaleType.AVITO.value:
+        order_message += f"Кол-во мешков для упаковки: {avito_boxes if avito_boxes else 'Не указано'}\n"
+
     if sale_type == "Доставка":
-        order_message += f"Дата доставки: 📅 {delivery_date}\n"
-        order_message += f"Время доставки: ⏰ {delivery_time}\n\n"
-        order_message += f"Адрес доставки: 📍 {delivery_address}\n\n"
+        order_message += f"📅 Дата доставки: {delivery_date}\n"
+        order_message += f"⏰ Время доставки: {delivery_time}\n\n"
+        order_message += f"📍 Адрес доставки: {delivery_address}\n\n"
         if note:
-            order_message += f"Заметка: 📝 {note}\n\n"
-        order_message += f"Контактный телефон: 📞 {contact_phone} ({contact_name})\n"
-        order_message += f"Сумма для оплаты: 💰 {total_price} ₽\n"
+            order_message += f"📝 Заметка: {note}\n\n"
+        order_message += f"📞 Контактный телефон: {contact_phone} ({contact_name})\n"
     else:
         if note:
-            order_message += f"Заметка: 📝 {note}\n"
+            order_message += f"📝 Заметка: {note}\n"
+    order_message += f"💰 Сумма для оплаты: {total_price} ₽\n" if total_price else  ""
     order_message += f"Менеджер: {manager_name} ({manager_username})"
     return order_message
 
@@ -168,3 +183,26 @@ def is_valid_command(message_text,state):
         state.delete()
         return False
     return True
+
+def create_media_group(avito_photos, order_message):
+    """
+    Формирует медиа-группу из фотографий и добавляет caption только для первого элемента.
+
+    :param avito_photos: массив фото.
+    :param order_message: Сообщение для первого фото.
+    :return: Список InputMediaPhoto для отправки через send_media_group.
+    """
+    media_group = []
+    for idx, photo_path in enumerate(avito_photos):
+        with open(photo_path, 'rb') as photo_file:
+            # Читаем содержимое файла в память
+            file_data = BytesIO(photo_file.read())
+
+            if idx == 0:
+                # Добавляем caption только для первого элемента
+                media_group.append(InputMediaPhoto(file_data, caption=order_message))
+            else:
+                # Для остальных элементов caption не указываем
+                media_group.append(InputMediaPhoto(file_data))
+
+    return media_group

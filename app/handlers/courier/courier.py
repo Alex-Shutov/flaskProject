@@ -22,30 +22,32 @@ from database import get_order_by_id
 
 from database import decrement_stock
 
+from utils import create_media_group
+
 bot = get_bot_instance()
 
 # Уведомление курьеров
 @bot.message_handler(state=AvitoStates.avito_message, func=lambda message: True)
-def notify_couriers(order_message,avito_photo,reply_message_id, state: StateContext):
-    couriers = get_couriers()  # Получаем список пользователей с ролью Courier
-    print(order_message)
-    print(reply_message_id)
-    # with state.data() as state_data
-    #     order_date = get_order_by_id(order_id)
-    #     avito_photo = state_data.get('avito_photo')
-    #     order_message = state_data.get('avito_message')
-    #     order_id = state_data.get('order_id')
-    #     reply_message_id = state_data.get('reply_message_id')
-    # # state.delete()
+def notify_couriers(order_message,state: StateContext,avito_photos=None,reply_message_id=None):
+    couriers = get_couriers()  # Получаем список курьеров
+
     for courier in couriers:
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("Принять заказ!", callback_data=f"accept_order_{extract_order_number(order_message)}_{reply_message_id}_{'has_avito_photo' if avito_photo else False}"))
+        markup.add(types.InlineKeyboardButton("Принять заказ!",
+                                              callback_data=f"accept_order_{extract_order_number(order_message)}_{reply_message_id}"))
 
-        # Проверяем, есть ли фото для отправки
-        if avito_photo:
-            bot.send_photo(courier['telegram_id'], open(avito_photo, 'rb'), caption=order_message, reply_markup=markup)
+        # Если есть фото, отправляем медиа-группу
+        if avito_photos:
+            media_group = create_media_group(avito_photos, order_message)
+            bot.send_media_group(courier['telegram_id'], media=media_group)
+            bot.send_message(courier['telegram_id'],
+                             "Если вы готовы принять заказ, нажмите:",
+                             reply_markup=markup)
         else:
+            # Если фото нет, просто отправляем сообщение с кнопкой
             bot.send_message(courier['telegram_id'], order_message, reply_markup=markup)
+
+    # Сохраняем `reply_message_id` в стейте
     state.set(CourierStates.reply_message_id)
 
 
@@ -162,13 +164,15 @@ def upload_invoice(call: types.CallbackQuery, state: StateContext):
 # Принятие заказа курьером
 @bot.callback_query_handler(func=lambda call: call.data.startswith('accept_order_'))
 def accept_order(call: types.CallbackQuery, state: StateContext):
-    has_avito_photo = call.data.split('_')[4]
     order_id = call.data.split('_')[2]
-    decrement_stock(order_id=order_id)
     reply_message_id = call.data.split('_')[3]
+
+    # Снижаем количество товара на складе
+    decrement_stock(order_id=order_id)
+
     user_info = get_user_info(call.from_user.username)
     state.add_data(reply_message_id=reply_message_id)
-    print(has_avito_photo)
+
     if not user_info:
         bot.answer_callback_query(call.id, "Не удалось получить информацию о курьере.")
         return
@@ -176,32 +180,28 @@ def accept_order(call: types.CallbackQuery, state: StateContext):
     courier_id = user_info['id']
     courier_name = user_info['name']
     courier_username = user_info['username']
+
     # Привязываем заказ к курьеру и обновляем статус
     update_order_courier(order_id, courier_id)
     update_order_status(order_id, 'in_delivery')
 
-    # Меняем текст сообщения о принятии заказа
+    # Изменяем сообщение о принятии заказа
     acceptance_message = (
-        f"Заказ \#{str(order_id).zfill(4)}ㅤ принят *в доставку*\n\n"
-        f"Вы сможете найти данный заказ по кнопке *Заказы* \-\> *Мои заказы в доставке*"
+        f"Вы приняли заказ, \#{str(order_id).zfill(4)}\u200B\n\n"
+        f"Теперь этот заказ доступен в разделе *Заказы* \-\> *Мои заказы в доставке*"
     )
 
-    # Изменяем сообщение о принятии заказа в зависимости от наличия фото
-    if has_avito_photo != 'False':
-        bot.edit_message_caption(acceptance_message, chat_id=call.message.chat.id,
-                                 message_id=call.message.message_id, parse_mode='MarkdownV2')
-    else:
-        bot.edit_message_text(acceptance_message, chat_id=call.message.chat.id,
-                              message_id=call.message.message_id, parse_mode='MarkdownV2')
+    # Обновляем текст сообщения для курьера
+    bot.edit_message_text(acceptance_message, chat_id=call.message.chat.id,
+                          message_id=call.message.message_id, parse_mode='MarkdownV2')
 
     # Отправляем сообщение в основной канал с информацией о курьере
     reply_params = ReplyParameters(message_id=int(reply_message_id))
-
     bot.send_message(CHANNEL_CHAT_ID,
                      f"Заказ \#{str(order_id).zfill(4)}ㅤ принят *в доставку*\n\nКурьер\: {courier_name} \({courier_username}\)",
                      reply_parameters=reply_params, parse_mode='MarkdownV2')
 
-
+    # Уведомление об успешном принятии заказа
     bot.answer_callback_query(call.id)
 
 

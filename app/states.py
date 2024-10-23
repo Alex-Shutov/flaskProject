@@ -8,15 +8,23 @@ class DirectStates(StatesGroup):
     sale_type = State()        # выбор типа продажи
     pack_id = State()
     command =State()
+    product_dict=State()
+    is_need_packing=State()
     total_price = State()
 
 
 class AvitoStates(StatesGroup):
     avito_photo = State()
+    avito_photos_tracks=State()
     avito_message=State()
     invoice_photo = State()
     order_id=State()
+    track_number_manual=State()
+    track_number=State()
     total_price=State()
+    in_avito_photo = State()
+    next_step=State()
+
 
 class CourierStates(StatesGroup):
     accepted = State()
@@ -48,6 +56,7 @@ class AdminStates(StatesGroup):
     choose_product = State()
     enter_product_params=State()
     enter_product_specific_params=State()
+    is_main_product=State()
     enter_product_param_values=State()
     enter_product_stock=State()
     enter_product_param_title=State()

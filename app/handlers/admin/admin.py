@@ -503,14 +503,16 @@ def handle_manage_products(call, state: StateContext):
 #     state.add_data(inherited_params=param_values)
 #     bot.send_message(message.chat.id, "Параметры успешно установлены.")
 
-@bot.message_handler(state=AdminStates.enter_product_name)
-def enter_product_name(message: types.Message, state: StateContext):
-    # Сохраняем название продукта
-    product_name = message.text.strip()
-    state.add_data(product_name=product_name)
 
+@bot.callback_query_handler(func=lambda call: call.data in ['is_main_product_yes', 'is_main_product_no'])
+def handle_is_main_product(call,state):
+    is_main_product = True if call.data == 'is_main_product_yes' else False
+    # Сохраняем значение в состоянии пользователя
+    state.add_data(is_main_product=is_main_product)
     # Получаем параметры типа продукта
+    message = call.message
     with state.data() as data:
+        product_name=data.get("product_name")
         selected_type_info = data.get('selected_type_product_info')
         print(selected_type_info)
         print('selected_type_info')
@@ -534,8 +536,7 @@ def enter_product_name(message: types.Message, state: StateContext):
 
         state.set(AdminStates.enter_product_specific_params)
         return
-
-    # Формируем сообщение с параметрами, которые необходимо заполнить
+        # Формируем сообщение с параметрами, которые необходимо заполнить
     param_list = "\n".join(
         [f"{param_name} ({param_info['type']})" for param_name, param_info in type_product_params.items()])
     message_text = f"Введите значения следующих параметров для продукта '{product_name}':\n\n{param_list}\n\nЗначения указывайте через запятую в том же порядке."
@@ -543,6 +544,17 @@ def enter_product_name(message: types.Message, state: StateContext):
 
     # Переходим к следующему состоянию
     state.set(AdminStates.enter_product_params)
+
+@bot.message_handler(state=AdminStates.enter_product_name)
+def enter_product_name(message: types.Message, state: StateContext):
+    # Сохраняем название продукта
+    product_name = message.text.strip()
+    state.add_data(product_name=product_name)
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(types.InlineKeyboardButton("Да", callback_data="is_main_product_yes"),
+               types.InlineKeyboardButton("Нет", callback_data="is_main_product_no"))
+    bot.send_message(message.chat.id, "Является ли продукт основным в сезоне?", reply_markup=markup)
 
 
 @bot.message_handler(state=AdminStates.enter_product_params)
@@ -605,6 +617,15 @@ def enter_product_params(message: types.Message, state: StateContext):
     state.set(AdminStates.enter_product_specific_params)
 
 
+def ask_is_main_product(chat_id):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(types.InlineKeyboardButton("Да", callback_data="is_main_product_yes"),
+               types.InlineKeyboardButton("Нет", callback_data="is_main_product_no"))
+    bot.send_message(chat_id, "Является ли продукт основным в сезоне?", reply_markup=markup)
+
+
+
+
 @bot.message_handler(state=AdminStates.enter_product_specific_params)
 def enter_product_specific_params(message: types.Message, state: StateContext):
     raw_params = message.text.split('\n')
@@ -627,9 +648,10 @@ def enter_product_specific_params(message: types.Message, state: StateContext):
         product_params = data.get('product_params',{})
         selected_type_info = data.get('selected_type_product_info')
         type_product_id = selected_type_info['id']
+        is_main_product = data.get('is_main_product')
 
     # Создаем продукт, добавляем основной набор параметров
-    product_id = create_product(product_name, type_product_id, product_params, specific_params)
+    product_id = create_product(product_name, type_product_id, is_main_product,  product_params, specific_params)
     formatted_product_values = format_type_product_values(product_params)
     formatted_specific_params = format_product_params(specific_params)
     # Создаем параметры для свойств продукта
@@ -651,9 +673,11 @@ def skip_product_specific_params(call: types.CallbackQuery, state: StateContext)
         product_params = data.get('product_params',{})
         selected_type_info = data.get('selected_type_product_info')
         type_product_id = selected_type_info['id']
+        is_main_product = data.get('is_main_product')
+
 
     # Создаем продукт без дополнительных параметров
-    product_id = create_product(product_name, type_product_id, product_params)
+    product_id = create_product(product_name, type_product_id, is_main_product, product_params)
 
     # Форматируем значения параметров типа продукта для отображения
     formatted_product_values = format_type_product_values(product_params)
