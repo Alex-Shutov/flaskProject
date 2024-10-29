@@ -21,8 +21,9 @@ def get_available_buttons(roles):
     buttons = []
     if UserRole.MANAGER.value in roles or UserRole.ADMIN.value in roles or UserRole.OWNER.value in roles:
         buttons.append(types.KeyboardButton("#Продажа"))
-    if UserRole.COURIER.value in roles or UserRole.ADMIN.value in roles or UserRole.OWNER.value in roles or UserRole.MANAGER.value in roles :
-        buttons.append(types.KeyboardButton("#Заказы"))
+    if UserRole.COURIER.value in roles or UserRole.ADMIN.value in roles or UserRole.OWNER.value  in roles :
+        buttons.append(types.KeyboardButton("#Доставка"))
+    buttons.append(types.KeyboardButton("#Заказы"))
     return buttons
 
 def escape_markdown_v2(text):
@@ -32,36 +33,96 @@ def escape_markdown_v2(text):
 
 def format_order_message(order_id, product_list, gift, note, sale_type,
                          manager_name, manager_username, delivery_date=None,
-                         delivery_time=None, delivery_address=None, delivery_note=None,
-                         contact_phone=None, contact_name=None, total_price=None, avito_boxes = None):
-    formatted_order_id = str(order_id).zfill(4)  # Экранирование для MarkdownV2
-    order_message = f"Заказ #{formatted_order_id}ㅤ\n\n"
-    order_message += f"Тип продажи: {SaleTypeRu[sale_type.upper()].value}\n\n"
+                         delivery_time=None, delivery_address=None, delivery_note=None,zone_name=None,
+                         contact_phone=None, contact_name=None, total_price=None, avito_boxes=None,hide_track_prices=False):
+    """
+    Форматирует сообщение о заказе с учетом типа продажи
 
-    # Добавляем продукты в сообщение
-    for product in product_list:
-        emoji = "📦 " if product['is_main_product'] else "➕ "
-        order_message += f"{emoji} Продукт: {product['product_name']} {product['param_title']}\n\n"
+    Args:
+        order_id: ID заказа
+        product_list: Список продуктов (для Avito - словарь с трек-номерами)
+        gift: Подарок
+        note: Заметка
+        sale_type: Тип продажи
+        manager_name: Имя менеджера
+        manager_username: Username менеджера
+        delivery_date: Дата доставки (для доставки)
+        delivery_time: Время доставки (для доставки)
+        delivery_address: Адрес доставки (для доставки)
+        zone_name: Зона доставки (для доставки)
+        delivery_note: Заметка для доставки
+        contact_phone: Контактный телефон (для доставки)
+        contact_name: Имя контакта (для доставки)
+        total_price: Общая сумма
+        avito_boxes: Количество мешков для Avito
+    """
+    formatted_order_id = str(order_id).zfill(4)
+    print(formatted_order_id)
+    # Формируем базовую структуру сообщения
+    print(sale_type.upper())
 
-    if gift:
-        order_message += f"🎁 Подарок: {gift}\n\n"
-
+    order_parts = [
+        f"📋 Заказ #{formatted_order_id}ㅤ\n",
+        f"🏷️ Тип продажи: {SaleTypeRu[sale_type.upper()].value}",
+        ""
+    ]
+    # Добавляем информацию о продуктах в зависимости от типа продажи
     if sale_type == SaleType.AVITO.value:
-        order_message += f"Кол-во мешков для упаковки: {avito_boxes if avito_boxes else 'Не указано'}\n"
+        for track_number, track_info in product_list.items():
+            if hide_track_prices:
+                order_parts.append(f"🔹 Трек-номер: {track_number}")
+            else:
+                track_price = track_info.get('price', 0)
+                order_parts.append(f"🔹 Трек-номер: {track_number} - {track_price} руб.")
 
-    if sale_type == "Доставка":
-        order_message += f"📅 Дата доставки: {delivery_date}\n"
-        order_message += f"⏰ Время доставки: {delivery_time}\n\n"
-        order_message += f"📍 Адрес доставки: {delivery_address}\n\n"
-        if note:
-            order_message += f"📝 Заметка: {note}\n\n"
-        order_message += f"📞 Контактный телефон: {contact_phone} ({contact_name})\n"
+            for product in track_info['products']:
+                emoji = "📦" if product.get('is_main_product') else "➕"
+                order_parts.append(f"  {emoji} {product['name']} - {product['param']}")
+            order_parts.append("")  # Пустая строка между трек-номерами
+
+        order_parts.append(f"\n")
+        if total_price is not None:
+            order_parts.append(f"💰 Общая сумма: {total_price} руб.\n")
+        order_parts.append(f"🛍️ Количество мешков: {avito_boxes}")
+
     else:
-        if note:
-            order_message += f"📝 Заметка: {note}\n"
-    order_message += f"💰 Сумма для оплаты: {total_price} ₽\n" if total_price else  ""
-    order_message += f"Менеджер: {manager_name} ({manager_username})"
-    return order_message
+        # Для прямых продаж и доставки
+        for product in product_list:
+            emoji = "📦" if product['is_main_product'] else "➕"
+            order_parts.append(f"{emoji} {product['product_name']} {product['param_title']}")
+        order_parts.append(f"\n")
+        if total_price:
+            order_parts.append(f"💰 Сумма: {total_price} руб.\n")
+    print(2)
+
+    # Добавляем подарок, если есть
+    if gift:
+        order_parts.append(f"🎁 Подарок: {gift}")
+    print(3)
+
+    # Добавляем информацию о доставке
+
+
+    # Добавляем заметку, если есть
+    if note:
+        order_parts.append(f"📝 Заметка: {note}\n")
+
+    if sale_type == SaleType.DELIVERY.value:
+        delivery_parts = [
+            f"📅 Дата доставки: {delivery_date}\n",
+            f"⏰ Время доставки: {delivery_time}\n",
+            f"📍 Адрес доставки: {delivery_address}\n",
+            f"🗺️ Зона доставки: {zone_name}\n",
+            f"👤 Получатель: {contact_name}\n",
+            f"📞 Телефон: {contact_phone}\n"
+        ]
+        order_parts.extend(delivery_parts)
+
+    # Добавляем информацию о менеджере
+    order_parts.append(f"🧑‍💻 Менеджер: {manager_name} ({manager_username})")
+
+    # Собираем все части сообщения, фильтруя пустые строки
+    return '\n'.join(filter(None, order_parts))
 
 
 def save_photo_and_resize(photo, order_id):
@@ -206,3 +267,40 @@ def create_media_group(avito_photos, order_message):
                 media_group.append(InputMediaPhoto(file_data))
 
     return media_group
+
+
+def normalize_time_input(time_input: str) -> str:
+    """
+    Нормализует ввод времени, поддерживая различные форматы.
+    Примеры:
+    - 14:30
+    - с 14:30
+    - до 19:00
+    - с 14:30 до 19:00
+    - 14:30 - 19:00
+    """
+    # Очищаем строку от лишних пробелов
+    time_input = time_input.strip().lower()
+
+    # Паттерн для поиска времени в формате ЧЧ:ММ
+    time_pattern = r'\d{1,2}:\d{2}'
+
+    # Находим все временные значения в строке
+    times = re.findall(time_pattern, time_input)
+
+    if len(times) == 1:
+        # Если найдено одно время
+        if 'до' in time_input:
+            return f"до {times[0]}"
+        elif 'с' in time_input:
+            return f"с {times[0]}"
+        else:
+            return times[0]
+    elif len(times) == 2:
+        # Если найдено два времени
+        if 'с' in time_input and 'до' in time_input:
+            return f"с {times[0]} до {times[1]}"
+        else:
+            return f"{times[0]} - {times[1]}"
+
+    return time_input

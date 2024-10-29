@@ -8,6 +8,10 @@ from database import get_product_info_with_params, get_product_params
 
 from database import decrement_stock
 
+from app_types import OrderType, SaleType
+
+from app_types import SaleTypeRu
+
 
 def get_user_by_username(username, state):
     """
@@ -35,69 +39,128 @@ def get_user_by_username(username, state):
 
 
 def review_order_data(chat_id, state: StateContext):
+    """
+    Формирует и отображает сводку заказа перед финальным подтверждением
+    """
     with state.data() as data:
+        # Получаем базовые данные заказа
+        sale_type = data.get('sale_type')
         product_dict = data.get('product_dict', {})
         gift = data.get('gift', 'Без подарка')
         note = data.get('note', 'Без заметок')
-        packer_id = data.get('pack_id', None)
+        packer_id = data.get('pack_id')
+        user_info = data.get('user_info')
         total_price = data.get('total_price', 'Не указана')
-        sale_type = data.get('sale_type')
-        # Собираем текст для вывода продуктов
-        product_details = []
-        print(product_dict)
-        for product_id, param_ids in product_dict.items():
-            product_info = get_product_info_with_params(product_id, param_ids[0])  # Получаем информацию о продукте
-            print(product_info)
-            print('product_info')
-            product_name = product_info['name']
-            product_param = product_info['param_title']
-            # product_params = ', '.join(
-            #     [get_product_params(param_id)[1] for param_id in param_ids])  # Название параметров
-            product_details.append(f"{product_name} {product_param}")
-        product_text = '\n'.join(product_details)
-        # Упаковщик или сообщение о его отсутствии
-        print(product_text)
-        packer_text = "Упаковщик: Без упаковщика" if not packer_id else f"Упаковщик: {get_user_info(packer_id)['name']}"
+        print(data,'data')
+        # Группируем продукты по трек-номерам для Авито
 
-        # Собираем текст общего сообщения
-        order_summary = f"""
-        Продукты:
-        
-{product_text}
+        products_by_tracking = {}
+        if sale_type == "avito":
+            avito_products = data.get("avito_products", {})
+            print(avito_products)
+            for track_number, track_info in avito_products.items():
+                products_by_tracking[track_number] = {
+                    'products': [],
+                    'price': track_info['price']
+                }
+                products = track_info['products']
+                for product_id, param_ids in products.items():
+                    for param_id in param_ids:
+                        product_info = get_product_info_with_params(product_id, param_id)
+                        if product_info:
+                            products_by_tracking[track_number]['products'].append({
+                                'name': product_info['name'],
+                                'param': product_info['param_title']
+                            })
+        # Формируем основной текст заказа
+        order_summary = ["📦 Предпросмотр заказа:"]
+        order_summary.append(f"\nТип продажи: {SaleTypeRu[sale_type.upper()].value}")
+        # Добавляем информацию о продуктах
 
-    Подарок: {gift}
-    Заметка: {note}
-    {packer_text}
-    Цена продажи: {total_price}
-    """
-        # Если это Авито, добавляем трек-коды
+        if sale_type == "avito":
+            total = 0
+            print(products_by_tracking)
+            for track_number, track_info in products_by_tracking.items():
+                total += track_info['price']
+                order_summary.append(f"\n🔹 Трек-номер: {track_number}\n")
+                for product in track_info['products']:
+                    order_summary.append(f"  • {product['name']} - {product['param']}")
+                    order_summary.append(f"{track_info['price']} руб.")
+            order_summary.append(f"\n💰 Общая сумма заказа: {total} руб.")
+        else:
+            order_summary.append("\n🛒 Продукты:")
+            for product_id, param_ids in product_dict.items():
+                # Перебираем все параметры для каждого продукта
+                for param_id in param_ids:
+                    product_info = get_product_info_with_params(product_id, param_id)
+                    if product_info:
+                        emoji = "📦" if product_info.get('is_main_product') else "➕"
+                        order_summary.append(f"  {emoji} {product_info['name']} - {product_info['param_title']}")
+        # Добавляем общую информацию
+        packer_info = ''
+        if packer_id is not None and sale_type in [SaleType.DELIVERY.value, SaleType.AVITO.value]:
+            packer_info = f"🛍️ {get_packer_info(int(packer_id),state=state,username=user_info['username'])}"
+
+        order_summary.extend([
+            f"\n🎁 Подарок: {gift}",
+            f"📝 Заметка: {note}",
+            packer_info
+        ])
+        if sale_type != 'avito':
+            order_summary.append(f'\n💰 Сумма заказа: {total_price} руб.')
+        # Добавляем специфичную информацию по типу заказа
         if sale_type == "avito":
             avito_photos_tracks = data.get('avito_photos_tracks', {})
-            tracks_text = '\n'.join([f"{track}" for photo, track in avito_photos_tracks.items()])
-            order_summary += f"\nТрекинг-коды:\n{tracks_text}"
-            order_summary+=f"\nКол-во мешков для упаковки: {len(avito_photos_tracks.keys())}\n"
-
-        # Если это доставка, добавляем данные доставки
+            order_summary.append(f"\n📦 Количество мешков: {len(avito_photos_tracks)}")
         elif sale_type == "delivery":
-            delivery_date = data.get('delivery_date')
-            delivery_address = data.get('delivery_address')
-            contact_phone = data.get('contact_phone')
-            contact_name = data.get('contact_name')
-            order_summary += f"""
-            Дата доставки: {delivery_date}
-            Адрес доставки: {delivery_address}
-            Контактное лицо: {contact_name}
-            Телефон: {contact_phone}
-            """
-        # Отправляем собранное сообщение
+            full_address = data.get('delivery_address', '')['full_address']
+            zone_name = data.get('zone_name')
+            delivery_info = [
+                f"\n📍 Информация о доставке:",
+                f"🏠 Адрес: {full_address}",
+                f"🎯 Зона доставки: {zone_name}",
+                f"📅 Дата доставки: {data.get('delivery_date')}",
+                f"⏰ Время доставки: {data.get('delivery_time')}",
+                f"👤 Получатель: {data.get('contact_name')}",
+                f"📞 Телефон: {data.get('contact_phone')}"
+            ]
+            order_summary.extend(delivery_info)
 
+        # Формируем клавиатуру для подтверждения
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("Да", callback_data="confirm_final_order"))
-        markup.add(types.InlineKeyboardButton("Нет", callback_data="cancel_order"))
+        markup.add(
+            types.InlineKeyboardButton("✅ Подтвердить", callback_data="confirm_final_order"),
+            types.InlineKeyboardButton("❌ Отменить", callback_data="cancel_order")
+        )
 
-        bot.send_message(chat_id, order_summary, reply_markup=markup)
+        # Отправляем сообщение
+        bot.send_message(
+            chat_id,
+            '\n'.join(filter(None, order_summary)),  # Фильтруем пустые строки
+            reply_markup=markup,
+            parse_mode='HTML'
+        )
 
 
+
+
+def get_packer_info(packer_id,state=None,username=None):
+    """Возвращает информацию об упаковщике"""
+    if not packer_id:
+        return "Упаковщик: Не назначен"
+    packer = get_user_info(packer_id) if not state and not username else get_user_by_username(username,state)
+    return f"Упаковщик: {packer['name']} (@{packer['username']})"
+
+
+def get_delivery_info(data):
+    """Формирует информацию о доставке"""
+    return [
+        f"\n📅 Дата доставки: {data.get('delivery_date', 'Не указана')}",
+        f"🕒 Время: {data.get('delivery_time', 'Не указано')}",
+        f"📍 Адрес: {data.get('delivery_address', 'Не указан')}",
+        f"👤 Получатель: {data.get('contact_name', 'Не указан')}",
+        f"📞 Телефон: {data.get('contact_phone', 'Не указан')}"
+    ]
 def process_product_stock(product_dict):
     """
     Обрабатывает изменения на складе для продуктов в заказе.
@@ -109,3 +172,10 @@ def process_product_stock(product_dict):
         for param_id in set(param_ids):
             quantity = param_ids.count(param_id)
             decrement_stock(product_id=product_id, product_param_id=param_id, quantity=quantity)
+
+def delete_multiple_states(state: StateContext,states_to_delete_array:[]):
+    with state.data() as data:
+        # Список состояний для удаления
+        states_to_delete = states_to_delete_array
+        for state_name in states_to_delete:
+            data.pop(state_name, None)

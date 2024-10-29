@@ -1,289 +1,352 @@
-from ast import parse
-
 from telebot import types
-from bot import get_bot_instance
-from database import get_couriers, update_order_status,get_user_info,update_order_courier,update_order_invoice_photo
 from telebot.types import CallbackQuery, ReplyParameters, Message
-from utils import format_order_message_for_courier,save_photo_and_resize,extract_order_number
 from telebot.states.sync.context import StateContext
-from states import AvitoStates, CourierStates
+from bot import bot
 from config import CHANNEL_CHAT_ID
-from app_types import OrderType
-from database import get_orders
-
-from app_types import UserRole
-
-from states import AppStates
-
-from handlers.handlers import get_user_by_username
-from utils import format_order_message
-
-from database import get_order_by_id
-
-from database import decrement_stock
-
-from utils import create_media_group
-
-bot = get_bot_instance()
-
-# Уведомление курьеров
-@bot.message_handler(state=AvitoStates.avito_message, func=lambda message: True)
-def notify_couriers(order_message,state: StateContext,avito_photos=None,reply_message_id=None):
-    couriers = get_couriers()  # Получаем список курьеров
-
-    for courier in couriers:
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("Принять заказ!",
-                                              callback_data=f"accept_order_{extract_order_number(order_message)}_{reply_message_id}"))
-
-        # Если есть фото, отправляем медиа-группу
-        if avito_photos:
-            media_group = create_media_group(avito_photos, order_message)
-            bot.send_media_group(courier['telegram_id'], media=media_group)
-            bot.send_message(courier['telegram_id'],
-                             "Если вы готовы принять заказ, нажмите:",
-                             reply_markup=markup)
-        else:
-            # Если фото нет, просто отправляем сообщение с кнопкой
-            bot.send_message(courier['telegram_id'], order_message, reply_markup=markup)
-
-    # Сохраняем `reply_message_id` в стейте
-    state.set(CourierStates.reply_message_id)
+from database import (
+    get_couriers,
+    update_order_status,
+    get_user_info,
+    update_order_courier,
+    update_order_invoice_photo,
+    get_orders,
+    get_order_by_id,
+    decrement_stock
+)
+from app_types import OrderType, UserRole
+from utils import format_order_message, create_media_group, extract_order_number
+from middlewares.delivery_zones import (
+    DeliveryZoneManager,
+    DeliveryCostCalculator,
+    CourierTripManager
+)
+from states import AppStates, CourierStates
 
 
+def notify_couriers(order_message, avito_photos=None, reply_message_id=None, state: StateContext = None):
+    """Уведомляет всех курьеров о новом заказе"""
+    try:
+        # Получаем список всех курьеров
+        couriers = get_couriers()
 
-
-# Обработка завершения заказа (загрузка накладной)
-@bot.message_handler(state=AvitoStates.invoice_photo, content_types=['photo'])
-def handle_invoice_photo(message: types.Message, state: StateContext):
-    chat_id = message.chat.id
-    with state.data() as data:
-        order_id = data.get('order_id')
-        reply_message_id = data.get('reply_message_id')
-        message_to_edit_id = data.get('message_to_edit')
-    if message.photo:
-        photo = message.photo[-1]
-        file_info = bot.get_file(photo.file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        invoice_path = save_photo_and_resize(downloaded_file, f"invoice_{chat_id}")
-        # Сохраняем путь к накладной
-
-        state.add_data(invoice_photo=invoice_path)
-        update_order_invoice_photo(order_id, invoice_path)
-        complete_order(order_id,reply_message_id,message_to_edit_id,message,invoice_path,message.from_user.username)
-
-    else:
-        bot.send_message(chat_id, "Пожалуйста, загрузите фото накладной.")
-
-
-# Функция для показа активных заказов
-@bot.callback_query_handler(func=lambda call: call.data == 'orders_show_active')
-def show_active_orders(call: types.CallbackQuery, state: StateContext):
-    # Получаем все активные заказы с типом 'avito' или 'delivery' и courier_id == null
-    orders = get_orders(order_type=['avito', 'delivery'], status=[OrderType.READY_TO_DELIVERY.value], is_courier_null=True)
-    if orders:
-        for order in orders:
-            order_message = format_order_message_for_courier(order)
+        for courier in couriers:
             markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("Принять заказ", callback_data=f"accept_order_{order['id']}_{order['message_id']}_{'has_avito_photo' if order['avito_photo'] else False}"))
-            if order['order_type'] == 'avito' and order.get('avito_photo'):
-                # Если это Avito заказ и фото доступно
-                with open(order['avito_photo'], 'rb') as photo:
-                    bot.send_photo(
-                        call.message.chat.id,
-                        photo,
-                        caption=order_message,
-                        reply_markup=markup
-                    )
-            else:
-                # Для доставки или отсутствующего фото Avito
-                bot.send_message(
-                    call.message.chat.id,
-                    order_message,
-                    reply_markup=markup
+            markup.add(
+                types.InlineKeyboardButton(
+                    "📦 Принять заказ",
+                    callback_data=f"accept_order_{extract_order_number(order_message)}_{reply_message_id}"
                 )
-    else:
-        bot.send_message(call.message.chat.id, "Нет активных заказов")
-    state.set(CourierStates.reply_message_id)
-    # bot.answer_callback_query(call.id)
-
-# Функция для показа заказов курьера в доставке
-@bot.callback_query_handler(func=lambda call: call.data == 'orders_show_in_delivery')
-def show_courier_orders_in_delivery(call: types.CallbackQuery, state: StateContext):
-    user_info = get_user_info(call.from_user.username)  # Получаем информацию о курьере
-    if not user_info:
-        bot.answer_callback_query(call.id, "Не удалось получить информацию о пользователе.")
-        return
-
-    # Получаем заказы с типом 'in_delivery', где courier_id == id курьера
-    orders = get_orders(order_type=['avito', 'delivery'], role='courier', status=['in_delivery'], username=call.from_user.username)
-    state.set(CourierStates.accepted)
-    if orders:
-        for order in orders:
-            order_message = format_order_message_for_courier(order)
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton(
-                "Завершить заказ",
-                callback_data=f"upload_invoice_{order['id']}_{order['message_id']}_{order['order_type'] if order['order_type'] else None}_{order['message_id'] if order['message_id'] else None }"
-            ))
-
-            if order['order_type'] == 'avito' and order.get('avito_photo'):
-                # Если это Avito заказ и фото доступно
-                with open(order['avito_photo'], 'rb') as photo:
-                    bot.send_photo(
-                        call.message.chat.id,
-                        photo,
-                        caption=order_message,
-                        reply_markup=markup
-                    )
-            else:
-                # Для доставки или отсутствующего фото Avito
-                bot.send_message(
-                    call.message.chat.id,
-                    order_message,
-                    reply_markup=markup
-                )
-    else:
-        bot.send_message(call.message.chat.id, "У вас нет заказов в доставке.")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('upload_invoice_'))
-def upload_invoice(call: types.CallbackQuery, state: StateContext):
-    print(call.data)
-    order_type=call.data.split('_')[4]
-    reply_message_id=call.data.split('_')[5]
-    order_id = call.data.split('_')[2]
-    state.add_data(message_to_edit=call.message.message_id)
-    if order_type=='delivery':
-        complete_order(order_id, reply_message_id, call.message.message_id, call.message, None, call.message.chat.username)
-        return
-    bot.send_message(call.message.chat.id, "Пожалуйста, загрузите фото накладной.")
-    # Устанавливаем состояние ожидания фото
-    state.set(AvitoStates.invoice_photo)
-    state.add_data(order_id=order_id)
-
-# Принятие заказа курьером
-@bot.callback_query_handler(func=lambda call: call.data.startswith('accept_order_'))
-def accept_order(call: types.CallbackQuery, state: StateContext):
-    order_id = call.data.split('_')[2]
-    reply_message_id = call.data.split('_')[3]
-
-    # Снижаем количество товара на складе
-    decrement_stock(order_id=order_id)
-
-    user_info = get_user_info(call.from_user.username)
-    state.add_data(reply_message_id=reply_message_id)
-
-    if not user_info:
-        bot.answer_callback_query(call.id, "Не удалось получить информацию о курьере.")
-        return
-
-    courier_id = user_info['id']
-    courier_name = user_info['name']
-    courier_username = user_info['username']
-
-    # Привязываем заказ к курьеру и обновляем статус
-    update_order_courier(order_id, courier_id)
-    update_order_status(order_id, 'in_delivery')
-
-    # Изменяем сообщение о принятии заказа
-    acceptance_message = (
-        f"Вы приняли заказ, \#{str(order_id).zfill(4)}\u200B\n\n"
-        f"Теперь этот заказ доступен в разделе *Заказы* \-\> *Мои заказы в доставке*"
-    )
-
-    # Обновляем текст сообщения для курьера
-    bot.edit_message_text(acceptance_message, chat_id=call.message.chat.id,
-                          message_id=call.message.message_id, parse_mode='MarkdownV2')
-
-    # Отправляем сообщение в основной канал с информацией о курьере
-    reply_params = ReplyParameters(message_id=int(reply_message_id))
-    bot.send_message(CHANNEL_CHAT_ID,
-                     f"Заказ \#{str(order_id).zfill(4)}ㅤ принят *в доставку*\n\nКурьер\: {courier_name} \({courier_username}\)",
-                     reply_parameters=reply_params, parse_mode='MarkdownV2')
-
-    # Уведомление об успешном принятии заказа
-    bot.answer_callback_query(call.id)
-
-
-# Завершение заказа курьером
-def complete_order(order_id, reply_message_id, message_to_edit_id, message, invoice_photo,username):
-    print(message)
-    user_info = get_user_info(username)
-    print(user_info)
-    if not user_info:
-        # bot.answer_callback_query(message.id, "Не удалось получить информацию о курьере.")
-        return
-
-    courier_name = user_info['name']
-    courier_username = user_info['username']
-
-    # Обновляем статус заказа на завершенный
-    update_order_status(order_id, OrderType.CLOSED.value)
-
-    # Отправляем сообщение о завершении заказа пользователю
-    print(message.chat.id)
-    print('message.chat.id')
-    print('reply_message_id')
-    print(reply_message_id)
-    bot.delete_message(chat_id=message.chat.id, message_id=message_to_edit_id)
-    bot.send_message(
-        message.chat.id,
-        f"Заказ \#{str(order_id).zfill(4)}ㅤ *завершен*",
-        parse_mode='MarkdownV2'
-    )
-
-    reply_params = ReplyParameters(message_id=int(reply_message_id))
-    # Отправляем сообщение в основной канал с информацией о курьере
-    if invoice_photo:
-        with open(invoice_photo, 'rb') as photo:
-            bot.send_photo(
-                CHANNEL_CHAT_ID,
-                photo,
-                caption=f"Заказ \#{str(order_id).zfill(4)}ㅤ *завершен*\n\nКурьер\: {courier_name} \({courier_username}\)",
-                reply_parameters=reply_params,
-                parse_mode='MarkdownV2'
             )
-    else:
-        bot.send_message(
-            CHANNEL_CHAT_ID,
-            f"Заказ \#{str(order_id).zfill(4)}ㅤ *завершен*\n\nКурьер\: {courier_name} \({courier_username}\)",
-            reply_parameters=reply_params,
-            parse_mode='MarkdownV2'
-        )
-    # bot.answer_callback_query(call.id)
 
+            # Если есть фото (для Авито), отправляем их
+            if avito_photos:
+                media_group = create_media_group(avito_photos, order_message)
+                bot.send_media_group(courier['telegram_id'], media=media_group)
+                bot.send_message(
+                    courier['telegram_id'],
+                    "Если вы готовы принять заказ, нажмите кнопку ниже:",
+                    reply_markup=markup
+                )
+            else:
+                # Если фото нет, просто отправляем сообщение с кнопкой
+                bot.send_message(
+                    courier['telegram_id'],
+                    f"{order_message}\n\nЕсли вы готовы принять заказ, нажмите кнопку ниже:",
+                    reply_markup=markup
+                )
 
-# Начало работы с заказами (выбор типа заказа)
-@bot.callback_query_handler(func=lambda call: call.data.startswith('orders_delivery'), state=AppStates.picked_action)
-def handle_orders(call: CallbackQuery, state: StateContext):
+    except Exception as e:
+        print(f"Error in notify_couriers: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data == 'orders_delivery', state=AppStates.picked_action)
+def handle_orders_delivery(call: CallbackQuery, state: StateContext):
+    """Обработчик нажатия кнопки 'Доставка товара'"""
     markup = types.InlineKeyboardMarkup()
     markup.add(
-        types.InlineKeyboardButton("Активные заказы", callback_data='orders_show_active'),
-        types.InlineKeyboardButton("Мои заказы (в доставке)", callback_data='orders_show_in_delivery')
+        types.InlineKeyboardButton("📋 Активные заказы", callback_data='orders_show_active'),
+        types.InlineKeyboardButton("🚚 Мои заказы в доставке", callback_data='orders_show_in_delivery')
+    )
+    bot.edit_message_text(
+        "Выберите тип заказов:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
     )
     state.set(CourierStates.orders)
-    bot.send_message(call.message.chat.id, "Выберите тип заказов:", reply_markup=markup)
 
-# Обработчик доставленных товаров
-@bot.callback_query_handler(func=lambda call: call.data == 'orders_delivered', state=AppStates.picked_action)
-def show_delivered_orders(call: types.CallbackQuery, state: StateContext):
-    with state.data() as data:
-        start_date = data['start_date']
-        end_date = data['end_date']
 
-    user_info = get_user_by_username(call.from_user.username, state)
+@bot.message_handler(func=lambda message: message.text == '#Доставка')
+def show_courier_menu(message: Message):
+    """Показывает главное меню курьера"""
+    try:
+        user_info = get_user_info(message.from_user.username)
+        if not user_info or UserRole.COURIER.value not in user_info['roles']:
+            bot.reply_to(message, "У вас нет доступа к функциям курьера.")
+            return
 
-    # Получаем заказы, где courier_id совпадает с текущим пользователем и статус "closed" или "refund"
-    orders = get_orders(username=call.from_user.username, status=['closed', 'refund'], start_date=start_date, end_date=end_date, courier=True)
-
-    if not orders:
-        bot.send_message(call.message.chat.id, "Нет доставленных товаров за выбранный период.")
-        return
-
-    # Отправляем каждое сообщение через format_order_message
-    for order in orders:
-        order_message = format_order_message(
-            order['id'], order['product_id'], order['product_param_id'], order['gift'],
-            order['note'], order['order_type'], user_info['name'], user_info['username']
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton("🚗 Создать поездку", callback_data="create_trip"),
+            types.InlineKeyboardButton("📋 Активные заказы", callback_data="show_active_orders"),
+            types.InlineKeyboardButton("🚚 Мои поездки", callback_data="show_my_trips"),
+            types.InlineKeyboardButton("📊 Статистика доставок", callback_data="delivery_stats")
         )
-        bot.send_message(call.message.chat.id, order_message)
+
+        bot.reply_to(
+            message,
+            "🚚 Меню курьера\nВыберите действие:",
+            reply_markup=markup
+        )
+
+    except Exception as e:
+        bot.reply_to(message, "Произошла ошибка при загрузке меню курьера.")
+        print(f"Error in show_courier_menu: {e}")
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "show_active_orders")
+def show_active_orders(call: CallbackQuery):
+    """Показывает все активные заказы, доступные для доставки"""
+    try:
+        orders = get_orders(
+            order_type=['avito', 'delivery'],
+            status=[OrderType.READY_TO_DELIVERY.value],
+            is_courier_null=True
+        )
+
+        if not orders:
+            bot.answer_callback_query(call.id, "Нет активных заказов")
+            bot.edit_message_text(
+                "На данный момент нет активных заказов для доставки.",
+                call.message.chat.id,
+                call.message.message_id
+            )
+            return
+
+        # Создаем сообщение со списком заказов
+        message_text = "📦 Доступные заказы:\n\n"
+        markup = types.InlineKeyboardMarkup(row_width=1)
+
+        for order in orders:
+            # Форматируем информацию о заказе
+            order_info = format_order_message(
+                order_id=order['id'],
+                product_list=order['products'].get('general', []),
+                gift=order['gift'],
+                note=order['note'],
+                sale_type=order['order_type'],
+                delivery_date=order.get('delivery_date'),
+                delivery_time=order.get('delivery_time'),
+                delivery_address=order.get('delivery_address'),
+                contact_phone=order.get('contact_phone'),
+                contact_name=order.get('contact_name'),
+                hide_track_prices=True
+            )
+            message_text += f"{order_info}\n{'—' * 30}\n"
+
+            # Добавляем кнопку для каждого заказа
+            markup.add(
+                types.InlineKeyboardButton(
+                    f"📦 Принять заказ #{order['id']}",
+                    callback_data=f"accept_order_{order['id']}_{order['message_id']}"
+                )
+            )
+
+        # Добавляем кнопку возврата в меню
+        markup.add(
+            types.InlineKeyboardButton("🔙 Вернуться в меню", callback_data="back_to_courier_menu")
+        )
+
+        bot.edit_message_text(
+            message_text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+
+    except Exception as e:
+        bot.answer_callback_query(call.id, "Произошла ошибка при загрузке заказов")
+        print(f"Error in show_active_orders: {e}")
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "show_my_trips")
+def show_courier_trips(call: CallbackQuery):
+    """Показывает активные поездки курьера"""
+    try:
+        user_info = get_user_info(call.from_user.username)
+        if not user_info:
+            bot.answer_callback_query(call.id, "Ошибка получения информации о пользователе")
+            return
+
+        # Получаем заказы курьера в доставке
+        orders = get_orders(
+            username=call.from_user.username,
+            status=['in_delivery'],
+            role='courier'
+        )
+
+        if not orders:
+            bot.answer_callback_query(call.id)
+            bot.edit_message_text(
+                "У вас нет активных поездок.",
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=types.InlineKeyboardMarkup().add(
+                    types.InlineKeyboardButton("🔙 Вернуться в меню", callback_data="back_to_courier_menu")
+                )
+            )
+            return
+
+        message_text = "🚚 Ваши активные поездки:\n\n"
+        markup = types.InlineKeyboardMarkup(row_width=1)
+
+        for order in orders:
+            order_text = format_order_message(
+                order_id=order['id'],
+                product_list=order['products'].get('general', []),
+                gift=order['gift'],
+                note=order['note'],
+                sale_type=order['order_type'],
+                delivery_date=order.get('delivery_date'),
+                delivery_time=order.get('delivery_time'),
+                delivery_address=order.get('delivery_address'),
+                contact_phone=order.get('contact_phone'),
+                contact_name=order.get('contact_name'),
+                hide_track_prices=True
+            )
+            message_text += f"{order_text}\n{'—' * 30}\n"
+
+            markup.add(
+                types.InlineKeyboardButton(
+                    f"✅ Завершить доставку #{order['id']}",
+                    callback_data=f"complete_delivery_{order['id']}_{order['message_id']}"
+                )
+            )
+
+        markup.add(
+            types.InlineKeyboardButton("🔙 Вернуться в меню", callback_data="back_to_courier_menu")
+        )
+
+        bot.edit_message_text(
+            message_text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+
+    except Exception as e:
+        bot.answer_callback_query(call.id, "Произошла ошибка при загрузке поездок")
+        print(f"Error in show_courier_trips: {e}")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('accept_order_'))
+def accept_order(call: CallbackQuery, state: StateContext):
+    """Принятие заказа курьером"""
+    try:
+        order_id = call.data.split('_')[2]
+        reply_message_id = call.data.split('_')[3]
+
+        user_info = get_user_info(call.from_user.username)
+        if not user_info:
+            bot.answer_callback_query(call.id, "Не удалось получить информацию о курьере.")
+            return
+
+        # Снижаем количество товара на складе
+        decrement_stock(order_id=order_id)
+
+        # Привязываем заказ к курьеру и обновляем статус
+        update_order_courier(order_id, user_info['id'])
+        update_order_status(order_id, OrderType.IN_DELIVERY.value)
+
+        # Отправляем сообщение курьеру
+        bot.edit_message_text(
+            f"✅ Вы приняли заказ #{order_id}\n\n"
+            f"Теперь этот заказ доступен в разделе 'Мои поездки'",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=types.InlineKeyboardMarkup().add(
+                types.InlineKeyboardButton("🚚 Мои поездки", callback_data="show_my_trips")
+            )
+        )
+
+        # Отправляем сообщение в основной канал
+        reply_params = ReplyParameters(message_id=int(reply_message_id))
+        bot.send_message(
+            CHANNEL_CHAT_ID,
+            f"🚚 Заказ #{order_id} принят в доставку\n"
+            f"Курьер: {user_info['name']} (@{user_info['username']})",
+            reply_parameters=reply_params
+        )
+
+    except Exception as e:
+        bot.answer_callback_query(call.id, "Произошла ошибка при принятии заказа")
+        print(f"Error in accept_order: {e}")
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "delivery_stats")
+def show_delivery_stats(call: CallbackQuery):
+    """Показывает статистику доставок курьера"""
+    try:
+        user_info = get_user_info(call.from_user.username)
+        if not user_info:
+            bot.answer_callback_query(call.id, "Ошибка получения информации о пользователе")
+            return
+
+        # Получаем завершенные заказы курьера
+        completed_orders = get_orders(
+            username=call.from_user.username,
+            status=['closed'],
+            role='courier'
+        )
+
+        # Подсчитываем статистику
+        total_deliveries = len(completed_orders)
+        total_items = sum(
+            len(order['products'].get('general', []))
+            for order in completed_orders
+        )
+
+        # Формируем сообщение со статистикой
+        stats_message = (
+            "📊 Ваша статистика доставок:\n\n"
+            f"📦 Всего доставлено заказов: {total_deliveries}\n"
+            f"🎁 Всего доставлено товаров: {total_items}\n"
+        )
+
+        markup = types.InlineKeyboardMarkup().add(
+            types.InlineKeyboardButton("🔙 Вернуться в меню", callback_data="back_to_courier_menu")
+        )
+
+        bot.edit_message_text(
+            stats_message,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+
+    except Exception as e:
+        bot.answer_callback_query(call.id, "Произошла ошибка при загрузке статистики")
+        print(f"Error in show_delivery_stats: {e}")
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "back_to_courier_menu")
+def back_to_menu(call: CallbackQuery):
+    """Возврат в главное меню курьера"""
+    try:
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton("🚗 Создать поездку", callback_data="create_trip"),
+            types.InlineKeyboardButton("📋 Активные заказы", callback_data="show_active_orders"),
+            types.InlineKeyboardButton("🚚 Мои поездки", callback_data="show_my_trips"),
+            types.InlineKeyboardButton("📊 Статистика доставок", callback_data="delivery_stats")
+        )
+
+        bot.edit_message_text(
+            "🚚 Меню курьера\nВыберите действие:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+
+    except Exception as e:
+        bot.answer_callback_query(call.id, "Произошла ошибка при возврате в меню")
+        print(f"Error in back_to_menu: {e}")

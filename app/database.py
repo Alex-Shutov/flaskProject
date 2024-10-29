@@ -81,77 +81,140 @@ def create_order(product_dict, gift, note, sale_type, manager_id, message_id,
                  delivery_date=None, delivery_time=None, delivery_address=None,
                  delivery_note=None, contact_phone=None, contact_name=None, total_price=None):
     """
-    Создает новый заказ в базе данных и добавляет продукты в order_items.
-    Теперь фотографии и трек-номера сохраняются в таблицу avito_photos.
-    """
-    print(product_dict, gift, sale_type, manager_id, message_id, packer_id, status_order,
-          delivery_date, delivery_time, delivery_address, delivery_note, contact_phone, contact_name, total_price)
+    Создает новый заказ в базе данных
 
+    Returns:
+        dict: Словарь с id заказа и информацией о продуктах, сгруппированной по трек-номерам для Авито
+    """
+    print(0)
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            # Создаем запись в таблице orders
-            query = """
-                INSERT INTO orders (
-                    gift, note, order_type, manager_id, 
-                    message_id, packer_id, created_at, status,
-                    delivery_date, delivery_time, delivery_address, 
-                    delivery_note, contact_phone, contact_name, total_price,avito_boxes_count
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s, %s, %s, %s, %s, %s,%s)
-                RETURNING id;
-            """
-            cursor.execute(query, (
-                gift, note, sale_type, manager_id, message_id, packer_id, status_order,
-                delivery_date, delivery_time, delivery_address, delivery_note, contact_phone, contact_name, total_price,
-                len(avito_photos_tracks.keys()) if avito_photos_tracks else 0
-            ))
-            print(1234222)
-            order_id = cursor.fetchone()[0]
-            product_info_list = []
+            try:
+                # Начинаем транзакцию
+                cursor.execute("BEGIN")
+                print(1)
+                # Создаем основной заказ
+                order_query = """
+                    INSERT INTO orders (
+                        gift, note, order_type, manager_id, message_id, packer_id,
+                        status, delivery_date, delivery_time, delivery_address,
+                        delivery_note, contact_phone, contact_name, total_price,
+                        avito_boxes_count, created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    RETURNING id;
+                """
+                cursor.execute(order_query, (
+                    gift, note, sale_type, manager_id, message_id, packer_id,
+                    status_order, delivery_date, delivery_time, delivery_address,
+                    delivery_note, contact_phone, contact_name, total_price,
+                    len(avito_photos_tracks) if avito_photos_tracks else 0
+                ))
+                order_id = cursor.fetchone()[0]
+                print(2)
 
-            # Добавляем все продукты и их параметры в order_items
-            for product_id, param_ids in product_dict.items():
-                for param_id in param_ids:
-                    product_info = get_product_info_with_params(product_id, param_id)
-                    print(product_info)
+                # Инициализируем список информации о продуктах
+                product_info_list = {}
 
-                    if isinstance(product_info, tuple):
-                        product_name = product_info[0]  # name должен быть первым элементом
-                        product_values = product_info[1]  # product_values - вторым
-                        is_main_product = product_info[2]  # is_main_product - третьим
-                    else:
-                        product_name = product_info['name']
-                        product_values = product_info['product_values']
-                        is_main_product = product_info['is_main_product']
-                        param_title = product_info['param_title']
+                # Если это заказ Авито
+                if sale_type == 'avito' and isinstance(product_dict, dict):
+                    product_info_list = {}  # Для хранения информации по трек-номерам
 
-                    # Добавляем продукт в order_items
-                    cursor.execute("""
-                        INSERT INTO order_items (
-                            order_id, product_id, product_param_id, product_name, product_param_title, 
-                            product_values, is_main_product, status, created_at
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s::public.status_order, NOW())
-                    """, (order_id, product_id, param_id, product_name, param_title, json.dumps(product_values),
-                          is_main_product, status_order))
+                    for track_number, track_info in product_dict.items():
+                        track_price = track_info['price']
+                        products = track_info['products']
 
-                    product_info_list.append({
-                        'product_id': product_id,
-                        'product_name': product_name,
-                        'is_main_product': is_main_product,
-                        'param_title': param_title,
-                        'param_id': param_id,
-                    })
-            # Добавляем фотографии и трек-номера в таблицу avito_photos
-            if avito_photos_tracks:
-                for photo_path, track_number in avito_photos_tracks.items():
-                    cursor.execute("""
-                        INSERT INTO avito_photos (order_id, photo_path, tracking_number, created_at)
-                        VALUES (%s, %s, %s, NOW())
-                    """, (order_id, photo_path, track_number))
+                        # Инициализируем список продуктов для этого трек-номера
+                        product_info_list[track_number] = {
+                            'products': [],
+                            'price': track_price
+                        }
 
-            conn.commit()
-            return {'id': order_id, 'values': product_info_list}
+                        # Сохраняем фото и трек-номер
+                        for photo_path, photo_track in avito_photos_tracks.items():
+                            if photo_track == track_number:
+                                cursor.execute("""
+                                    INSERT INTO avito_photos (order_id, photo_path, tracking_number)
+                                    VALUES (%s, %s, %s)
+                                """, (order_id, photo_path, track_number))
+
+                        # Сохраняем продукты для данного трек-номера
+                        for product_id, param_ids in products.items():
+                            for param_id in param_ids:
+                                product_info = get_product_info_with_params(product_id, param_id)
+                                if product_info:
+                                    # Добавляем в список продуктов для возврата
+                                    product_info_list[track_number]['products'].append({
+                                        'name': product_info['name'],
+                                        'param': product_info['param_title'],
+                                        'is_main_product': product_info['is_main_product']
+                                    })
+
+                                    # Сохраняем в базу
+                                    cursor.execute("""
+                                        INSERT INTO order_items (
+                                            order_id, product_id, product_param_id,
+                                            product_name, product_param_title,
+                                            product_values, is_main_product,
+                                            status, tracking_number, track_price
+                                        )
+                                        VALUES (
+                                            %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s
+                                        )
+                                    """, (
+                                        order_id, product_id, param_id,
+                                        product_info['name'], product_info['param_title'],
+                                        json.dumps(product_info['product_values']),
+                                        product_info['is_main_product'],
+                                        status_order, track_number, track_price
+                                    ))
+                else:
+                    # Для обычных заказов сохраняем все продукты в общий список
+                    product_info_list['general'] = []
+                    print(3)
+
+                    for product_id, param_ids in product_dict.items():
+                        for param_id in param_ids:
+                            product_info = get_product_info_with_params(product_id, param_id)
+                            if product_info:
+                                # Добавляем информацию о продукте в список
+                                product_info_item = {
+                                    'product_id': product_id,
+                                    'product_name': product_info['name'],
+                                    'is_main_product': product_info['is_main_product'],
+                                    'param_title': product_info['param_title'],
+                                    'param_id': param_id,
+                                }
+                                product_info_list['general'].append(product_info_item)
+                                print(4)
+
+                                # Сохраняем в базу
+                                cursor.execute("""
+                                    INSERT INTO order_items (
+                                        order_id, product_id, product_param_id,
+                                        product_name, product_param_title,
+                                        product_values, is_main_product,
+                                        status
+                                    )
+                                    VALUES (
+                                        %s, %s, %s, %s, %s, %s::jsonb, %s, %s
+                                    )
+                                """, (
+                                    order_id, product_id, param_id,
+                                    product_info['name'], product_info['param_title'],
+                                    json.dumps(product_info['product_values']),
+                                    product_info['is_main_product'],
+                                    status_order
+                                ))
+                print(5)
+
+                # Завершаем транзакцию
+                cursor.execute("COMMIT")
+                return {'id': order_id, 'values': product_info_list}
+
+            except Exception as e:
+                cursor.execute("ROLLBACK")
+                raise e
 
 
 def create_order_items(order_id, product_id, product_name, product_values, is_main_product):
@@ -217,17 +280,54 @@ def get_couriers():
 def get_orders(order_type=None, username=None, status=None, is_courier_null=False, start_date=None, end_date=None, role=None):
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            # Строим запрос динамически
+            # Базовый запрос с подзапросом для получения продуктов
             query = """
-                SELECT o.id, o.product_id, o.product_param_id, o.gift, o.note, o.order_type, o.status, o.created_at,
-                       o.manager_id, o.message_id, o.avito_photo, o.closed_date, o.packer_id, o.courier_id,
-                       o.delivery_date, o.delivery_time, o.delivery_address, o.delivery_note, o.contact_phone, o.contact_name, o.total_price
+                WITH products_grouped AS (
+                    SELECT 
+                        oi.order_id,
+                        oi.tracking_number,
+                        jsonb_agg(
+                            jsonb_build_object(
+                                'product_id', p.id,
+                                'name', p.name,
+                                'is_main_product', oi.is_main_product,
+                                'param', pp.title
+                            )
+                        ) as product_list,
+                        MAX(oi.track_price) as track_price
+                    FROM order_items oi
+                    JOIN products p ON oi.product_id = p.id
+                    JOIN product_params pp ON oi.product_param_id = pp.id
+                    GROUP BY oi.order_id, oi.tracking_number
+                ),
+                final_products AS (
+                    SELECT 
+                        order_id,
+                        jsonb_object_agg(
+                            COALESCE(tracking_number, 'no_track'),
+                            jsonb_build_object(
+                                'products', product_list,
+                                'price', track_price
+                            )
+                        ) as products
+                    FROM products_grouped
+                    GROUP BY order_id
+                )
+                SELECT o.id, o.gift, o.note, o.order_type, o.status, o.created_at,
+                       o.manager_id, o.message_id, o.closed_date, o.packer_id, o.courier_id,
+                       o.delivery_date, o.delivery_time, o.delivery_address, o.delivery_note, 
+                       o.contact_phone, o.contact_name, o.total_price, o.avito_boxes_count,
+                       fp.products,
+                       m.name as manager_name, m.username as manager_username
                 FROM orders o
+                LEFT JOIN final_products fp ON o.id = fp.order_id
+                LEFT JOIN users m ON o.manager_id = m.id
                 WHERE 1=1
             """
 
             params = []
 
+            # Добавляем условия фильтрации
             if order_type and isinstance(order_type, list):
                 query += " AND o.order_type = ANY(%s)"
                 params.append(order_type)
@@ -256,54 +356,55 @@ def get_orders(order_type=None, username=None, status=None, is_courier_null=Fals
                 params.append(start_date)
                 params.append(end_date)
 
-            if order_type and isinstance(order_type, list):
-                query += " ORDER BY CASE"
-                for idx, o_type in enumerate(order_type):
-                    query += f" WHEN o.order_type = %s THEN {idx}"
-                    params.append(o_type)
-                query += " END"
+            # Добавляем сортировку
+            query += " ORDER BY o.id DESC"
 
-            if status and isinstance(status, list):
-                query += ", CASE"
-                for idx, st in enumerate(status):
-                    query += f" WHEN o.status = %s THEN {idx}"
-                    params.append(st)
-                query += " END"
-            query += ", o.id ASC"
-
-            cursor.execute(query, tuple(params))
+            cursor.execute(query, tuple(params) if params else None)
             orders = cursor.fetchall()
 
-            formatted_orders = [
-                {
+            # Форматируем результаты
+            formatted_orders = []
+            for order in orders:
+                formatted_order = {
                     'id': order[0],
-                    'product_id': order[1],
-                    'product_param_id': order[2],
-                    'gift': order[3],
-                    'note': order[4],
-                    'order_type': order[5],
-                    'status': order[6],
-                    'created_at': order[7],
-                    'manager_id': order[8],
-                    'message_id': order[9],
-                    'avito_photo': order[10],
-                    'closed_date': order[11],
-                    'packer_id': order[12],
-                    'courier_id': order[13],
-                    'delivery_date': order[14],
-                    'delivery_time': order[15],
-                    'delivery_address': order[16],
-                    'delivery_note': order[17],
-                    'contact_phone': order[18],
-                    'contact_name': order[19],
-                    'total_price': order[20]
+                    'gift': order[1],
+                    'note': order[2],
+                    'order_type': order[3],
+                    'status': order[4],
+                    'created_at': order[5],
+                    'manager_id': order[6],
+                    'message_id': order[7],
+                    'closed_date': order[8],
+                    'packer_id': order[9],
+                    'courier_id': order[10],
+                    'delivery_date': order[11],
+                    'delivery_time': order[12],
+                    'delivery_address': order[13],
+                    'delivery_note': order[14],
+                    'contact_phone': order[15],
+                    'contact_name': order[16],
+                    'total_price': order[17],
+                    'avito_boxes': order[18],
+                    'products': order[19] if order[19] else {},  # Теперь это уже сгруппированный объект
+                    'manager_name': order[20],
+                    'manager_username': order[21]
                 }
-                for order in orders
-            ]
+
+                # Преобразование products уже не требуется, так как группировка
+                # выполнена в SQL-запросе
+                formatted_orders.append(formatted_order)
 
             return formatted_orders
 
-
+def get_avito_photos(order_id):
+    """Получает фотографии для заказа Авито"""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT photo_path FROM avito_photos WHERE order_id = %s",
+                (order_id,)
+            )
+            return [row[0] for row in cursor.fetchall()]
 
 def update_order_status(order_id, status):
     with get_connection() as conn:
@@ -460,25 +561,60 @@ def update_order_packer(order_id, packer_id):
             """, (packer_id, order_id))
             conn.commit()
 
+
 def get_active_orders_without_packer():
     """
-    Возвращает список активных заказов без назначенного упаковщика с информацией о продуктах.
+    Возвращает список активных заказов без назначенного упаковщика
     """
     with get_connection() as conn:
         with conn.cursor() as cursor:
             # Получаем заказы без упаковщика
             query = """
-                SELECT o.id, o.gift, o.note, o.order_type, o.status, o.created_at, 
-                       o.manager_id, o.message_id,o.avito_boxes_count
+                WITH order_products AS (
+                    SELECT 
+                        oi.order_id,
+                        jsonb_agg(
+                            jsonb_build_object(
+                                'product_id', p.id,
+                                'product_name', p.name,
+                                'is_main_product', oi.is_main_product,
+                                'param_title', pp.title,
+                                'param_id', pp.id,
+                                'tracking_number', oi.tracking_number,
+                                'track_price', oi.track_price
+                            )
+                        ) as products
+                    FROM order_items oi
+                    JOIN products p ON oi.product_id = p.id
+                    JOIN product_params pp ON oi.product_param_id = pp.id
+                    GROUP BY oi.order_id, oi.tracking_number
+                )
+                SELECT 
+                    o.id, 
+                    o.gift, 
+                    o.note, 
+                    o.order_type, 
+                    o.status, 
+                    o.created_at,
+                    o.manager_id, 
+                    o.message_id,
+                    o.avito_boxes_count,
+                    o.total_price,
+                    op.products,
+                    m.name as manager_name,
+                    m.username as manager_username
                 FROM orders o
-                WHERE o.status = 'active' AND o.packer_id IS NULL
+                LEFT JOIN order_products op ON o.id = op.order_id
+                LEFT JOIN users m ON o.manager_id = m.id
+                WHERE o.status = 'active' 
+                AND o.packer_id IS NULL
             """
             cursor.execute(query)
             orders = cursor.fetchall()
 
-            # Форматируем заказы как список словарей
-            formatted_orders = [
-                {
+            formatted_orders = []
+            for order in orders:
+                formatted_order = {
                     'id': order[0],
                     'gift': order[1],
                     'note': order[2],
@@ -487,81 +623,144 @@ def get_active_orders_without_packer():
                     'created_at': order[5],
                     'manager_id': order[6],
                     'message_id': order[7],
-                    'avito_boxes':order[8],
-                    'products': []  # Здесь будем хранить список продуктов
+                    'avito_boxes': order[8],
+                    'total_price': order[9],
+                    'products': order[10] if order[10] else [],
+                    'manager_name': order[11],
+                    'manager_username': order[12]
                 }
-                for order in orders
-            ]
 
-            # Получаем список продуктов для всех заказов
-            order_ids = [order['id'] for order in formatted_orders]
-            if order_ids:
-                query_products = """
-                    SELECT oi.order_id, p.id AS product_id, p.name AS product_name, 
-                           oi.is_main_product, pp.title AS param_title, pp.id AS param_id
-                    FROM order_items oi
-                    JOIN products p ON oi.product_id = p.id
-                    JOIN product_params pp ON oi.product_param_id = pp.id
-                    WHERE oi.order_id IN %s
-                """
-                cursor.execute(query_products, (tuple(order_ids),))
-                products = cursor.fetchall()
+                if formatted_order['order_type'] == 'avito':
+                    # Группируем продукты по трек-номерам
+                    products_by_track = {}
+                    for product in formatted_order['products']:
+                        track_num = product['tracking_number']
+                        if track_num not in products_by_track:
+                            products_by_track[track_num] = {
+                                'products': [],
+                                'price': product['track_price']
+                            }
+                        products_by_track[track_num]['products'].append({
+                            'name': product['product_name'],
+                            'param': product['param_title'],
+                            'is_main_product': product['is_main_product']
+                        })
+                    formatted_order['products'] = products_by_track
+                else:
+                    # Для не-Авито заказов оставляем простой список
+                    formatted_order['products'] = [{
+                        'name': p['product_name'],
+                        'param_title': p['param_title'],
+                        'is_main_product': p['is_main_product']
+                    } for p in formatted_order['products']]
 
-                # Добавляем продукты к соответствующим заказам
-                for product in products:
-                    for order in formatted_orders:
-                        if order['id'] == product[0]:
-                            order['products'].append({
-                                'product_id': product[1],
-                                'product_name': product[2],
-                                'is_main_product': product[3],
-                                'param_title': product[4],
-                                'param_id': product[5]
-                            })
+                formatted_orders.append(formatted_order)
 
             return formatted_orders
 
+
 def get_order_by_id(order_id):
     """
-    Возвращает заказ по его ID.
+    Возвращает заказ по его ID со всеми связанными данными.
 
-    :param order_id: ID заказа
-    :return: Заказ в виде словаря, если найден, иначе None
+    Args:
+        order_id: ID заказа
+    Returns:
+        dict: Словарь с данными заказа или None
     """
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            # Строим запрос для получения заказа по ID
             query = """
-                SELECT o.id, o.product_id, o.product_param_id, o.gift, o.note, o.order_type, o.status, o.created_at, 
-                       o.manager_id, o.message_id, o.avito_photo, o.closed_date, o.packer_id, o.courier_id
+                WITH products_grouped AS (
+                    SELECT 
+                        oi.order_id,
+                        oi.tracking_number,
+                        jsonb_agg(
+                            jsonb_build_object(
+                                'product_id', p.id,
+                                'name', p.name,
+                                'is_main_product', oi.is_main_product,
+                                'param', pp.title
+                            )
+                        ) as product_list,
+                        MAX(oi.track_price) as track_price
+                    FROM order_items oi
+                    JOIN products p ON oi.product_id = p.id
+                    JOIN product_params pp ON oi.product_param_id = pp.id
+                    WHERE oi.order_id = %s
+                    GROUP BY oi.order_id, oi.tracking_number
+                ),
+                final_products AS (
+                    SELECT 
+                        order_id,
+                        jsonb_object_agg(
+                            COALESCE(tracking_number, 'no_track'),
+                            jsonb_build_object(
+                                'products', product_list,
+                                'price', track_price
+                            )
+                        ) as products
+                    FROM products_grouped
+                    GROUP BY order_id
+                )
+                SELECT 
+                    o.id, 
+                    o.gift, 
+                    o.note, 
+                    o.order_type, 
+                    o.status, 
+                    o.created_at,
+                    o.manager_id, 
+                    o.message_id, 
+                    o.closed_date, 
+                    o.packer_id, 
+                    o.courier_id,
+                    o.delivery_date,
+                    o.delivery_time,
+                    o.delivery_address,
+                    o.delivery_note,
+                    o.contact_phone,
+                    o.contact_name,
+                    o.total_price,
+                    o.avito_boxes_count,
+                    fp.products,
+                    m.name as manager_name,
+                    m.username as manager_username
                 FROM orders o
+                LEFT JOIN final_products fp ON o.id = fp.order_id
+                LEFT JOIN users m ON o.manager_id = m.id
                 WHERE o.id = %s
             """
-            cursor.execute(query, (order_id,))
+            cursor.execute(query, (order_id, order_id))
             order = cursor.fetchone()
 
             if order:
-                # Форматируем результат как словарь для удобства
                 formatted_order = {
                     'id': order[0],
-                    'product_id': order[1],
-                    'product_param_id': order[2],
-                    'gift': order[3],
-                    'note': order[4],
-                    'order_type': order[5],
-                    'status': order[6],
-                    'created_at': order[7],
-                    'manager_id': order[8],
-                    'message_id': order[9],
-                    'avito_photo': order[10],
-                    'closed_date': order[11],
-                    'packer_id': order[12],
-                    'courier_id': order[13]
+                    'gift': order[1],
+                    'note': order[2],
+                    'order_type': order[3],
+                    'status': order[4],
+                    'created_at': order[5],
+                    'manager_id': order[6],
+                    'message_id': order[7],
+                    'closed_date': order[8],
+                    'packer_id': order[9],
+                    'courier_id': order[10],
+                    'delivery_date': order[11],
+                    'delivery_time': order[12],
+                    'delivery_address': order[13],
+                    'delivery_note': order[14],
+                    'contact_phone': order[15],
+                    'contact_name': order[16],
+                    'total_price': order[17],
+                    'avito_boxes': order[18],
+                    'products': order[19] if order[19] else {},
+                    'manager_name': order[20],
+                    'manager_username': order[21]
                 }
                 return formatted_order
-            else:
-                return None
-
+            return None
 
 def create_type_product(title, type_params):
     query = "INSERT INTO type_product (title, product_parameters, created_at) VALUES (%s, %s::jsonb, NOW()) RETURNING id"
@@ -798,10 +997,12 @@ def get_product_param_by_id(product_param_id):
 def decrement_stock(order_id=None, product_id=None, product_param_id=None, quantity=1):
     """
     Уменьшает количество на складе для указанного параметра продукта.
-    :param order_id: ID заказа для получения product_id и product_param_id
-    :param product_id: ID продукта (опционально, если указан order_id)
-    :param product_param_id: ID параметра продукта (опционально, если указан order_id)
-    :param quantity: Количество для вычитания из стока, по умолчанию 1
+
+    Args:
+        order_id: ID заказа для получения product_id и product_param_id
+        product_id: ID продукта (опционально, если указан order_id)
+        product_param_id: ID параметра продукта (опционально, если указан order_id)
+        quantity: Количество для вычитания из стока
     """
     if order_id is None and (product_id is None or product_param_id is None):
         raise ValueError("Необходимо указать либо order_id, либо product_id и product_param_id.")
@@ -809,50 +1010,82 @@ def decrement_stock(order_id=None, product_id=None, product_param_id=None, quant
     with get_connection() as conn:
         with conn.cursor() as cursor:
             try:
-                # Если указан order_id, извлекаем product_id и product_param_id из заказа
+                # Если указан order_id, извлекаем все product_id и product_param_id из order_items
                 if order_id is not None:
                     cursor.execute("""
-                        SELECT product_id, product_param_id 
-                        FROM orders 
-                        WHERE id = %s
+                        SELECT product_id, product_param_id, COUNT(*) as item_count
+                        FROM order_items 
+                        WHERE order_id = %s
+                        GROUP BY product_id, product_param_id
                     """, (order_id,))
-                    result = cursor.fetchone()
+                    items = cursor.fetchall()
 
-                    if result is None:
-                        raise ValueError(f"Заказ с ID {order_id} не найден.")
+                    if not items:
+                        raise ValueError(f"Товары для заказа с ID {order_id} не найдены.")
 
-                    product_id, product_param_id = result
-                    print(f"Извлеченные данные по заказу: product_id={product_id}, product_param_id={product_param_id}")
+                    # Обновляем сток для каждого товара
+                    for item in items:
+                        prod_id, param_id, item_quantity = item
 
-                # Проверка стока и блокировка строки
-                cursor.execute("""
-                    SELECT stock 
-                    FROM product_params 
-                    WHERE product_id = %s AND id = %s FOR UPDATE
-                """, (product_id, product_param_id))
-                current_stock = cursor.fetchone()
+                        # Проверка стока и блокировка строки
+                        cursor.execute("""
+                            SELECT stock 
+                            FROM product_params 
+                            WHERE product_id = %s AND id = %s 
+                            FOR UPDATE
+                        """, (prod_id, param_id))
+                        current_stock = cursor.fetchone()
 
-                if current_stock is None:
-                    raise ValueError(f"Продукт с ID {product_id} и параметром {product_param_id} не найден.")
+                        if current_stock is None:
+                            raise ValueError(f"Продукт с ID {prod_id} и параметром {param_id} не найден.")
 
-                if current_stock[0] < quantity:
-                    raise ValueError("Недостаточно стока для выполнения операции.")
+                        if current_stock[0] < item_quantity:
+                            raise ValueError(
+                                f"Недостаточно стока для товара {prod_id}. "
+                                f"Требуется: {item_quantity}, доступно: {current_stock[0]}"
+                            )
 
-                # Уменьшаем значение стока и обновляем запись
-                new_stock = current_stock[0] - quantity
-                cursor.execute("""
-                    UPDATE product_params 
-                    SET stock = %s 
-                    WHERE product_id = %s AND id = %s
-                """, (new_stock, product_id, product_param_id))
+                        # Уменьшаем значение стока
+                        new_stock = current_stock[0] - item_quantity
+                        cursor.execute("""
+                            UPDATE product_params 
+                            SET stock = %s 
+                            WHERE product_id = %s AND id = %s
+                        """, (new_stock, prod_id, param_id))
+
+                        print(f"Сток для товара {prod_id} уменьшен на {item_quantity}. Новый сток: {new_stock}")
+
+                else:
+                    # Если переданы конкретные product_id и product_param_id
+                    cursor.execute("""
+                        SELECT stock 
+                        FROM product_params 
+                        WHERE product_id = %s AND id = %s 
+                        FOR UPDATE
+                    """, (product_id, product_param_id))
+                    current_stock = cursor.fetchone()
+
+                    if current_stock is None:
+                        raise ValueError(f"Продукт с ID {product_id} и параметром {product_param_id} не найден.")
+
+                    if current_stock[0] < quantity:
+                        raise ValueError("Недостаточно стока для выполнения операции.")
+
+                    new_stock = current_stock[0] - quantity
+                    cursor.execute("""
+                        UPDATE product_params 
+                        SET stock = %s 
+                        WHERE product_id = %s AND id = %s
+                    """, (new_stock, product_id, product_param_id))
+
+                    print(f"Сток успешно уменьшен на {quantity}. Новый сток: {new_stock}")
+
                 conn.commit()
-
-                print(f"Сток успешно уменьшен на {quantity}. Новый сток: {new_stock}")
 
             except Exception as e:
                 conn.rollback()
                 print(f"Произошла ошибка при обновлении стока: {e}")
-
+                raise e
 
 def get_all_products_with_stock(type_id=None):
     with get_connection() as conn:

@@ -36,39 +36,50 @@ from handlers.handlers import process_product_stock
 
 from database import update_order_message_id
 
+from states import DirectStates
+
 # Инициализация хранилища состояний
 bot = get_bot_instance()
 
 
-
 @bot.message_handler(func=lambda message: message.text == '#Продажа')
-def handle_sale(message,state:StateContext):
+def handle_sale(message, state: StateContext):
     chat_id = message.chat.id
     state.delete()
-    with state.data() as data:
-        user_info = data.get('user_info')
-    print(user_info)
 
-    # user_state = load_user_state(chat_id)
-    # if chat_id in user_state:
-    #     state.delete()
+    # Начинаем с выбора типа продажи
+    state.set(SaleStates.sale_type)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Прямая", callback_data="sale_direct"))
+    markup.add(types.InlineKeyboardButton("Доставка", callback_data="sale_delivery"))
+    markup.add(types.InlineKeyboardButton("Авито", callback_data="sale_avito"))
+    bot.send_message(chat_id, "Выберите тип продажи:", reply_markup=markup)
 
-    # state = bot.get_state(message.chat.id)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('sale_'), state=SaleStates.sale_type)
+def handle_sale_type(call: types.CallbackQuery, state: StateContext):
+    sale_type = call.data.split('_')[1]
+    state.add_data(sale_type=sale_type)
+
+    # Переходим к выбору типа продукта
     state.set(SaleStates.type_product)
 
     product_types = get_product_type()
     markup = types.InlineKeyboardMarkup()
     for product_type in product_types:
         markup.add(types.InlineKeyboardButton(product_type[1], callback_data=f"type_product_{product_type[0]}"))
-    bot.send_message(chat_id, "Выберите тип:", reply_markup=markup)
+    bot.edit_message_text("Выберите тип продукта:",
+                          chat_id=call.message.chat.id,
+                          message_id=call.message.message_id,
+                          reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('type_product_'), state=SaleStates.type_product)
-def handle_product_sale(call: types.CallbackQuery,state:StateContext):
-    # user_state = load_user_state(chat_id)
-    # if chat_id in user_state:
-    #     state.delete()
-    type_id = call.data.split('_')[2]
-    # state = bot.get_state(message.chat.id)
+
+@bot.callback_query_handler(state=SaleStates.type_product)
+def handle_product_type(call: types.CallbackQuery, state: StateContext):
+    with state.data() as data:
+        type = data.get('type_product')
+    print(123)
+    type_id = call.data.split('_')[2] if not type else str(type['id'])
     state.add_data(type_product=get_type_product_by_id(type_id))
     state.set(SaleStates.product_id)
 
@@ -76,86 +87,118 @@ def handle_product_sale(call: types.CallbackQuery,state:StateContext):
     markup = types.InlineKeyboardMarkup()
     for product in products:
         markup.add(types.InlineKeyboardButton(product[1], callback_data=f"product_{product[0]}"))
-    bot.send_message(call.message.chat.id, "Выберите продукт:", reply_markup=markup)
+    bot.edit_message_text("Выберите продукт:",
+                          chat_id=call.message.chat.id,
+                          message_id=call.message.message_id,
+                          reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('product_'))
-def handle_product_selection(call: types.CallbackQuery,state:StateContext):
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('product_'), state=SaleStates.product_id)
+def handle_product_selection(call: types.CallbackQuery, state: StateContext):
     product_id = call.data.split('_')[1]
-    # Сохраняем выбранный продукт в состоянии
     with state.data() as data:
-        product_dict = data.get('product_dict', {})  # Используем словарь вместо отдельных списков
+        product_dict = data.get('product_dict', {})
         if not product_dict.get(product_id):
-            product_dict[product_id] = []  # Создаем запись для продукта с пустым списком параметров
+            product_dict[product_id] = []
 
     state.add_data(product_dict=product_dict)
     state.add_data(product_id=product_id)
-
-    # Переходим в состояние выбора параметра продукта
     state.set(SaleStates.param_id)
-    # save_param_to_redis(chat_id,'product_id', product_id)
 
-    # Отправляем параметры продукта
     params = get_product_params(product_id)
     markup = types.InlineKeyboardMarkup()
-
     for param in params:
-        markup.add(types.InlineKeyboardButton(f"{param[1]} (Осталось {param[2]})", callback_data=f"param_{param[0]}"))
-    bot.edit_message_text("Выберите параметр продукта:", chat_id=call.message.chat.id,
-                          message_id=call.message.message_id, reply_markup=markup)
+        markup.add(types.InlineKeyboardButton(f"{param[1]} (Осталось {param[2]})",
+                                              callback_data=f"param_{param[0]}"))
+    bot.edit_message_text("Выберите параметр продукта:",
+                          chat_id=call.message.chat.id,
+                          message_id=call.message.message_id,
+                          reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('param_'), state=SaleStates.param_id)
+def handle_param_selection(call: types.CallbackQuery, state: StateContext):
+    param_id = call.data.split('_')[1]
+    with state.data() as data:
+        product_id = data.get('product_id')
+        product_dict = data.get('product_dict', {})
+        if product_id:
+            product_dict[product_id].append(param_id)
+
+    state.add_data(product_dict=product_dict)
+
+    # Спрашиваем про дополнительный товар
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Да", callback_data="yes_add_more"))
+    markup.add(types.InlineKeyboardButton("Нет", callback_data="no_more_items"))
+    bot.edit_message_text("Хотите добавить дополнительный товар?",
+                          chat_id=call.message.chat.id,
+                          message_id=call.message.message_id,
+                          reply_markup=markup)
+
+
+def finalize_sale_process(call: types.CallbackQuery, state: StateContext):
+    with state.data() as data:
+        sale_type = data.get('sale_type')
+
+    if sale_type == "avito":
+        # Проверяем необходимость упаковки
+        with state.data() as data:
+            product_dict = data.get("product_dict", {})
+            if not product_dict:
+                bot.send_message(call.message.chat.id, "Нет продуктов для оформления заказа.")
+                return
+
+            total_products = sum(len(params) for params in product_dict.values())
+            state.set(SaleStates.total_price)
+            bot.send_message(call.message.chat.id, "Введите сумму для оплаты:")
+
+            if total_products >= 2 or needs_packing(product_dict):
+                state.add_data(is_need_packing=True)
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                markup.add(
+                    types.InlineKeyboardButton("Да", callback_data="pack_yes"),
+                    types.InlineKeyboardButton("Нет", callback_data="pack_no")
+                )
+                bot.send_message(call.message.chat.id, "Упакуете продукт самостоятельно?",
+                                 reply_markup=markup)
+                state.set(SaleStates.pack_id)
+
+    elif sale_type == "delivery":
+        handle_sale_delivery(call, state)
+    else:  # direct sale
+        state.set(SaleStates.total_price)
+        bot.send_message(call.message.chat.id, "Введите сумму для оплаты:")
+
 
 @bot.callback_query_handler(func=lambda call: call.data in ['yes_add_more', 'no_more_items'])
 def handle_additional_product(call: types.CallbackQuery, state: StateContext):
     if call.data == 'yes_add_more':
-        # Начинаем выбор нового продукта
         with state.data() as data:
             type_product = data.get('type_product')
             type_id = type_product['id']
-        print('type_id')
+
         products = get_products(str(type_id))
         markup = types.InlineKeyboardMarkup()
-        print(products)
         for product in products:
             markup.add(types.InlineKeyboardButton(product[1], callback_data=f"product_{product[0]}"))
-        bot.send_message(call.message.chat.id, "Выберите дополнительный товар", reply_markup=markup)
+        bot.send_message(call.message.chat.id, "Выберите продукт", reply_markup=markup)
         state.set(SaleStates.product_id)
-    elif call.data == 'no_more_items':
-        # Переход к добавлению подарка и завершению заказа
-        state.set(SaleStates.gift)
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("Пропустить", callback_data="skip"))
-        bot.send_message(call.message.chat.id, "Введите текст подарка или нажмите 'Пропустить':", reply_markup=markup)
-
-
-@bot.callback_query_handler(state=SaleStates.param_id, func=lambda call: call.data.startswith('param_'))
-def handle_param_selection(call: types.CallbackQuery,state:StateContext):
-    param_id = call.data.split('_')[1]
-    # Сохраняем параметр
-    # state = bot.get_state(call.message.chat.id)
-    with state.data() as data:
-        product_id = data.get('product_id')
-        product_dict = data.get('product_dict', {})
-
-        if product_id:
-            product_dict[product_id].append(param_id)  # Добавляем параметр к продукту
-
-    state.add_data(product_dict=product_dict)
-    print("Обновленные данные:", product_dict)
-
-
-    # state.add_data(param_id=param_id)
-    # save_param_to_redis(chat_id, 'param_id', param_id)
-
-
-    # Переход в состояние ввода подарка
-    state.set(SaleStates.gift)
-
-
-    # Спрашиваем текст подарка
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("Да", callback_data="yes_add_more"))
-    markup.add(types.InlineKeyboardButton("Нет", callback_data="no_more_items"))
-    bot.edit_message_text("Хотите оформить дополнительный товар?", chat_id=call.message.chat.id,
-                          message_id=call.message.message_id, reply_markup=markup)
+    else:
+        with state.data() as data:
+            sale_type = data.get('sale_type')
+            if sale_type == 'avito':
+                state.set(AvitoStates.avito_photo)
+                state.set(AvitoStates.avito_photo)
+                bot.send_message(call.message.chat.id, "Пожалуйста, загрузите фотографию для Авито.")
+            elif sale_type == 'delivery':
+                handle_sale_delivery(call,state)
+            elif sale_type == 'direct':
+                state.set(SaleStates.gift)
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("Пропустить", callback_data="skip"))
+                bot.send_message(call.message.chat.id, "Введите текст подарка или нажмите 'Пропустить':",
+                                 reply_markup=markup)
 
 @bot.callback_query_handler(state=SaleStates.gift, func=lambda call: call.data == 'skip')
 def skip_gift(call: types.CallbackQuery, state: StateContext):
@@ -186,163 +229,103 @@ def process_gift(message: types.Message, state: StateContext):
 
 @bot.callback_query_handler(state=SaleStates.note, func=lambda call: call.data == 'skip')
 def skip_note(call: types.CallbackQuery, state: StateContext):
-    # Пропускаем ввод примечания
     state.add_data(note=None)
-    # Переходим к выбору типа продажи
-    state.set(SaleStates.sale_type)
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("Прямая", callback_data="sale_direct"))
-    markup.add(types.InlineKeyboardButton("Доставка", callback_data="sale_delivery"))
-    markup.add(types.InlineKeyboardButton("Авито", callback_data="sale_avito"))
-    bot.send_message(call.message.chat.id, "Выберите тип продажи:", reply_markup=markup)
+    with state.data() as data:
+        sale_type = data.get('sale_type')
+    if sale_type == 'avito':
+        check_packing_requirements(call.message.chat.id, state)
+    else:
+        bot.send_message(call.message.chat.id, "Введите общую сумму для заказа")
+        state.set(SaleStates.total_price)
 
 @bot.message_handler(state=SaleStates.note, func=lambda message: True)
 def process_note(message: types.Message, state: StateContext):
-    # Сохраняем текст примечания
     note = message.text.strip()
     state.add_data(note=note)
-    # Переходим к выбору типа продажи
-    state.set(SaleStates.sale_type)
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("Прямая", callback_data="sale_direct"))
-    markup.add(types.InlineKeyboardButton("Доставка", callback_data="sale_delivery"))
-    markup.add(types.InlineKeyboardButton("Авито", callback_data="sale_avito"))
-    bot.send_message(message.chat.id, "Выберите тип продажи:", reply_markup=markup)
+    with state.data() as data:
+        sale_type = data.get('sale_type')
+    if sale_type == 'avito':
+        check_packing_requirements(message.chat.id, state)
+    else:
+        bot.send_message(message.chat.id, "Введите общую сумму")
+        state.set(SaleStates.total_price)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('sale_'), state=SaleStates.sale_type)
-def handle_sale_type(call: types.CallbackQuery, state: StateContext):
-    sale_type = call.data.split('_')[1]
-    # Сохраняем тип продажи
-    state.add_data(sale_type=sale_type)
 
-    if sale_type == "avito":
-        with state.data() as data:
-            product_dict = data.get("product_dict", {})
-        if not product_dict:
-            bot.send_message(call.message.chat.id, "Нет продуктов для оформления заказа.")
-            return
-
+def check_packing_requirements(chat_id, state: StateContext):
+    """Проверяет требования к упаковке для заказа Авито"""
+    with state.data() as data:
+        product_dict = data.get('product_dict', {})
+        # Проверяем количество товаров
         total_products = sum(len(params) for params in product_dict.values())
+        print(total_products, '123')
 
+        # Если товар один, проверяем его тип
         if total_products == 1:
-            # Проверяем требует ли продукт упаковки
-            product_id, param_ids = next(iter(product_dict.items()))
-            product_info = get_product_info_with_params(product_id, param_ids[0])
-            param_type = product_info.get("product_values", {}).get("Тип", None)
+            product_id = list(product_dict.keys())[0]
+            product_info = get_product_info_with_params(product_id)
+            param_type = product_info.get("param_parameters", {}).get("Тип", None)
 
             if not param_type or param_type.lower() == "китай":
-                # Пропускаем упаковку и переходим к загрузке фото
-                bot.send_message(call.message.chat.id, "Данный продукт не требует упаковки")
+                # Не требует упаковки
+                data['is_need_packing'] = False
                 state.set(AvitoStates.avito_photo)
-                bot.send_message(call.message.chat.id, "Пожалуйста, загрузите фотографию для Авито.")
-            elif param_type.lower() == "россия":
-                state.add_data(is_need_packing=True)
-                # Предлагаем пользователю выбрать упаковку
-                markup = types.InlineKeyboardMarkup(row_width=2)
-                markup.add(
-                    types.InlineKeyboardButton("Да", callback_data="pack_yes"),
-                    types.InlineKeyboardButton("Нет", callback_data="pack_no")
-                )
-                bot.send_message(call.message.chat.id, "Упакуете продукт самостоятельно?", reply_markup=markup)
-                state.set(SaleStates.pack_id)
-            else:
-                bot.send_message(call.message.chat.id, "Ошибка в параметрах продукта.")
-        elif total_products >= 2:
-            print('---hi---')
-            state.add_data(is_need_packing=True)
-            # Упаковка требуется обязательно
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("Да", callback_data="pack_yes"),
-                types.InlineKeyboardButton("Нет", callback_data="pack_no")
-            )
-            bot.send_message(call.message.chat.id, "Упакуете все продукты самостоятельно?", reply_markup=markup)
-            # state.set(SaleStates.is_need_packing)
-            state.set(SaleStates.pack_id)
-    elif sale_type == "delivery":
-        handle_sale_delivery(call, state)
-    elif sale_type == "direct":
-        # Завершение заказа
-        state.set(SaleStates.total_price)
-        bot.send_message(call.message.chat.id, "Введите сумму для оплаты:")
-    bot.answer_callback_query(call.id)
+                bot.send_message(chat_id, "Товар не требует упаковки.")
+                review_order_data(chat_id, state)
+                return
+
+        # Если товаров больше одного или тип - Россия
+        data['is_need_packing'] = True
+        state.set(SaleStates.pack_id)
+
+    # Формируем кнопки после завершения работы с состоянием
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("Да", callback_data="pack_yes"),
+        types.InlineKeyboardButton("Нет", callback_data="pack_no")
+    )
+
+    bot.send_message(
+        chat_id,
+        "Упакуете продукт самостоятельно?",
+        reply_markup=markup
+    )
 
 
-
-# @bot.callback_query_handler(func=lambda call: call.data in ['sale_avito', 'sale_delivery'], state=SaleStates.sale_type)
-# def on_pack(call: types.CallbackQuery, state: StateContext):
-#     # Получаем информацию о продукте и его параметрах
-#     command = call.data
-#     state.add_data(command=command)
-#     if command == 'sale_delivery':
-#         handle_sale_delivery(call, state)
-#         return
-#     with state.data() as data:
-#         product_id = data.get("product_id")
-#         product_info = get_product_info_with_params(product_id)
-#         param_type = product_info.get("product_values", {}).get("Тип", None)
-#     # Проверяем значение параметра "Тип"
-#     if not param_type or param_type.lower() == "Россия".lower():
-#         # Пропускаем упаковку и переходим сразу к загрузке фотографии
-#         bot.send_message(call.message.chat.id, "Данный продукт не требует упаковки")
-#
-#         state.set(AvitoStates.avito_photo)
-#         bot.send_message(call.message.chat.id, "Пожалуйста, загрузите фотографию для Авито.")
-#     elif param_type.lower() == "Китай".lower():
-#         # Если продукт требует упаковки, то предлагаем пользователю выбрать
-#         markup = types.InlineKeyboardMarkup(row_width=2)
-#         markup.add(types.InlineKeyboardButton("Да", callback_data="pack_yes"))
-#         markup.add(types.InlineKeyboardButton("Нет", callback_data="pack_no"))
-#         bot.send_message(call.message.chat.id, "Упакуете продукт самостоятельно?", reply_markup=markup)
-#         state.set(SaleStates.pack_id)
-#     else:
-#         bot.send_message(call.message.chat.id, "Ошибка в параметрах продукта.")
-
-@bot.callback_query_handler(state=SaleStates.pack_id, func=lambda call: call.data in ['pack_yes', 'pack_no'])
-def handle_pack(call: types.CallbackQuery, state: StateContext):
-    data = call.data.split('_')[1]
-    user_info = get_user_by_username(call.from_user.username, state)
-    with state.data() as data:
-        command = data.get("command")
-    if data == 'yes':
-        bot.send_message(call.message.chat.id, "Вы выбрали упаковать продукт самостоятельно.")
-        state.add_data(pack_id=user_info['id'])
-        state.set(AvitoStates.avito_photo)
-        bot.send_message(call.message.chat.id, "Пожалуйста, загрузите фотографию для Авито.")
+@bot.callback_query_handler(func=lambda call: call.data in ['pack_yes', 'pack_no'], state=SaleStates.pack_id)
+def handle_pack_choice(call: types.CallbackQuery, state: StateContext):
+    """Обработчик выбора упаковщика"""
+    if call.data == 'pack_yes':
+        user = get_user_by_username(call.message.json['chat']['username'],state)
+        # Если менеджер будет упаковывать сам
+        state.add_data(pack_id=user['id'])
+        bot.edit_message_text(
+            "Вы будете упаковывать заказ самостоятельно.",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id
+        )
+        review_order_data(call.message.chat.id,state)
     else:
-        state.set(AvitoStates.avito_photo)
-        bot.send_message(call.message.chat.id, "Пожалуйста, загрузите фотографию для Авито.")
+        # Если нужен другой упаковщик
+        state.add_data(pack_id=None)
+        bot.edit_message_text(
+            "Упаковщик будет назначен позже.",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id
+        )
+        review_order_data(call.message.chat.id,state)
 
-@bot.callback_query_handler(state=SaleStates.sale_type, func=lambda call: True)
-def handle_sale_type(call: types.CallbackQuery,state:StateContext):
-    sale_type = call.data.split('_')[1]
-    # Сохраняем тип продажи
-    state.add_data(sale_type=sale_type)
-
-    if sale_type == "avito":
-        # Переход к состоянию загрузки фото для Авито
-        state.set(AvitoStates.avito_photo)
-        bot.send_message(call.message.chat.id, "Пожалуйста, загрузите фотографию для Авито.")
-    elif sale_type == "direct":
-        # Завершение заказа
-        state.set(SaleStates.total_price)
-        bot.send_message(call.message.chat.id, "Введите сумму для оплаты:")
-        # handle_total_price(call.message,state)
-        # finalize_order(call.message.chat.id,call.from_user.username,call.message.message_id,state)
 
 @bot.message_handler(state=SaleStates.total_price)
-def handle_total_price(message:types.Message,state:StateContext):
+def handle_total_price(message: types.Message, state: StateContext):
     if not is_valid_command(message.text, state): return
     try:
         total_amount = float(message.text)
         state.add_data(total_price=total_amount)
         # Завершаем процесс оформления заказа
-        print(123)
         review_order_data(message.chat.id, state)
-        # finalize_order(message.chat.id,message.from_user.username,message.message_id,state)
+        # finalize_avito_order(message.chat.id, message.message_id,message.from_user.username, state)
     except ValueError:
         bot.send_message(message.chat.id, "Некорректный формат суммы. Пожалуйста, введите число.")
-
 def finalize_order(chat_id, username, message_id, state: StateContext):
     # Загружаем состояние пользователя через контекстный менеджер
 
@@ -387,7 +370,7 @@ def finalize_order(chat_id, username, message_id, state: StateContext):
                 #     create_order_items(order_id, product_id, product_name, product_values, is_main_product)
                 update_order_status(order['id'],OrderType.CLOSED.value)
                 order_message = format_order_message(
-                    order['id'], order['values'], gift, note, sale_type, manager_name, manager_username, total_price=total_price
+                    order['id'], order['values']['general'], gift, note, sale_type, manager_name, manager_username, total_price=total_price
                 )
                 bot.send_message(chat_id, order_message)
                 reply_message_id = bot.send_message(CHANNEL_CHAT_ID, order_message)
@@ -434,3 +417,30 @@ def show_sold_orders(call: types.CallbackQuery, state: StateContext):
 #         types.InlineKeyboardButton("Мои заказы (в доставке)", callback_data='orders_show_in_delivery')
 #     )
 #     bot.send_message(message.chat.id, "Выберите тип заказов:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "cancel_order")
+def handle_cancel_order(call: types.CallbackQuery, state: StateContext):
+    """
+    Обработчик отмены заказа.
+    Полностью сбрасывает состояние и начинает процесс оформления заново.
+    """
+    # Удаляем текущее состояние
+    state.delete()
+
+    # Начинаем процесс заново
+    message_id = call.message.message_id
+    chat_id = call.message.chat.id
+
+    # Удаляем сообщение с подтверждением заказа
+    bot.delete_message(chat_id, message_id)
+
+    # Начинаем с выбора типа продажи
+    state.set(SaleStates.sale_type)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Прямая", callback_data="sale_direct"))
+    markup.add(types.InlineKeyboardButton("Доставка", callback_data="sale_delivery"))
+    markup.add(types.InlineKeyboardButton("Авито", callback_data="sale_avito"))
+
+    bot.send_message(chat_id, "Выберите тип продажи:", reply_markup=markup)
+
+

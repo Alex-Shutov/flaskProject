@@ -36,6 +36,8 @@ from utils import create_media_group
 
 from handlers.handlers import process_product_stock
 
+from handlers.handlers import delete_multiple_states
+
 bot = get_bot_instance()
 
 # @bot.message_handler(func=lambda message: message.text == 'Авито')
@@ -141,34 +143,60 @@ def handle_avito_photo(message: types.Message, state: StateContext):
         bot.send_message(chat_id,e)
 
 
-
 @bot.callback_query_handler(func=lambda call: call.data == 'confirm_track_number')
 def confirm_track_number(call: types.CallbackQuery, state: StateContext):
-    # Продолжаем обработку заказа с подтвержденным трекномером
-    print(call.message.text)
     if not is_valid_command(call.message.text, state): return
     with state.data() as data:
         track_number = data.get('track_number')
         photo_path = data.get('avito_photo')
 
-        # Достаем словарь с фото и трекномерами
+        # Сохраняем информацию о фото и трек-номере
         avito_photos_tracks = data.get('avito_photos_tracks', {})
-
-        # Добавляем пару фото-трекномер
         avito_photos_tracks[photo_path] = track_number
 
+        # Сохраняем продукты для этого трек-номера
+        product_dict = data.get("product_dict")
+        avito_products = data.get("avito_products", {})
+        avito_products[track_number] = {
+            'products': product_dict,
+            'price': 0  # Добавляем поле для цены
+        }
+
     state.add_data(avito_photos_tracks=avito_photos_tracks)
-    # Спрашиваем, хочет ли пользователь добавить еще фото
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("Да", callback_data="add_more_photos"),
-        types.InlineKeyboardButton("Нет", callback_data="no_more_photos")
-    )
-    bot.send_message(call.message.chat.id, "Добавить ещё фото для Авито?", reply_markup=markup)
+    state.add_data(avito_products=avito_products)
 
-    # Переходим в состояние для ожидания ответа
+    # Запрашиваем цену для этого трек-номера
+    bot.send_message(call.message.chat.id, f"Введите сумму для трек-номера {track_number}:")
+    state.set(AvitoStates.track_price)
 
-    state.set(AvitoStates.next_step)
+
+@bot.message_handler(state=AvitoStates.track_price)
+def handle_track_price(message: types.Message, state: StateContext):
+    if not is_valid_command(message.text, state): return
+    try:
+        track_price = float(message.text)
+
+        with state.data() as data:
+            track_number = data.get('track_number')
+            avito_products = data.get('avito_products', {})
+            # Сохраняем цену для текущего трек-номера
+        if track_number in avito_products:
+            avito_products[track_number]['price'] = track_price
+            state.add_data(avito_products=avito_products)
+        print(avito_products,'avitoProudcts')
+
+        # Спрашиваем про добавление следующего трек-номера
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("Да", callback_data="add_more_photos"),
+            types.InlineKeyboardButton("Нет", callback_data="no_more_photos")
+        )
+        bot.send_message(message.chat.id, "Добавить ещё трекномер Авито?", reply_markup=markup)
+        state.set(AvitoStates.next_step)
+
+    except ValueError:
+        bot.send_message(message.chat.id, "Некорректный формат суммы. Пожалуйста, введите число.")
+
 
 @bot.callback_query_handler(func=lambda call: call.data == 'edit_track_number')
 def edit_track_number(call: types.CallbackQuery, state: StateContext):
@@ -190,6 +218,12 @@ def handle_track_number_manual(message: types.Message, state: StateContext):
         # Добавляем пару фото-трекномер
         avito_photos_tracks[photo_path] = track_number
 
+        product_dict = data.get("product_dict")
+        avito_products = data.get("avito_products", {})
+        track_number = data.get("track_number")
+
+        avito_products[track_number] = product_dict
+    state.add_data(avito_products=avito_products)
         # Обновляем словарь в состоянии
     state.add_data(avito_photos_tracks=avito_photos_tracks)
 
@@ -199,58 +233,72 @@ def handle_track_number_manual(message: types.Message, state: StateContext):
         types.InlineKeyboardButton("Нет", callback_data="no_more_photos")
     )
     bot.send_message(message.chat.id, "Добавить ещё фото для Авито?", reply_markup=markup)
-
+    state.set(AvitoStates.next_step)
     # Переходим в состояние для ожидания ответа
 
 @bot.callback_query_handler(func=lambda call: call.data in ['add_more_photos', 'no_more_photos'])
 def handle_add_more_photos(call: types.CallbackQuery, state: StateContext):
     if call.data == 'add_more_photos':
         # Остаёмся в состоянии avito_photo и ожидаем ещё фото
-        state.set(AvitoStates.avito_photo)
-        bot.send_message(call.message.chat.id, "Загрузите ещё одну фотографию для Авито.")
+        state.set(DirectStates.type_product)
+        bot.edit_message_text("Оформите новые позиции для трекномера Авито", chat_id=call.message.chat.id,
+                          message_id=call.message.message_id)
+
+        delete_multiple_states(state,['product_dict'])
+        from handlers.manager.sale import handle_product_type
+        handle_product_type(call,state)
     elif call.data == 'no_more_photos':
         # Переходим к следующему шагу (ввод общей суммы)
-        state.set(AvitoStates.total_price)
         with state.data() as data:
             avito_photos_tracks = data.get('avito_photos_tracks', {})
-            print("Словарь фото и трекномеров:", avito_photos_tracks)
-        bot.send_message(call.message.chat.id, "Введите общую сумму для заказа Avito:")
+            avito_products = data.get("avito_products", {})
+            # Вычисляем общую сумму заказа на основе цен трек-номеров
+            print(avito_products.values())
+            total_price = sum(product_info['price'] for product_info in avito_products.values())
+        state.add_data(total_price=total_price)
+        state.set(DirectStates.gift)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("Пропустить", callback_data="skip"))
+        bot.send_message(call.message.chat.id, "Введите текст подарка или нажмите 'Пропустить':",
+                         reply_markup=markup)
     bot.answer_callback_query(call.id)
 
-@bot.message_handler(state=AvitoStates.total_price)
-def handle_total_price(message:types.Message,state:StateContext):
-    print(message.text)
-    if not is_valid_command(message.text, state): return
-    try:
-        total_amount = float(message.text)
-        state.add_data(total_price=total_amount)
-        # Завершаем процесс оформления заказа
-        review_order_data(message.chat.id,state)
-        # finalize_avito_order(message.chat.id, message.message_id,message.from_user.username, state)
-    except ValueError:
-        bot.send_message(message.chat.id, "Некорректный формат суммы. Пожалуйста, введите число.")
+# @bot.message_handler(state=AvitoStates.total_price)
+# def handle_total_price(message:types.Message,state:StateContext):
+#     print(message.text)
+#     if not is_valid_command(message.text, state): return
+#     try:
+#         total_amount = float(message.text)
+#         state.add_data(total_price=total_amount)
+#         # Завершаем процесс оформления заказа
+#         review_order_data(message.chat.id,state)
+#         # finalize_avito_order(message.chat.id, message.message_id,message.from_user.username, state)
+#     except ValueError:
+#         bot.send_message(message.chat.id, "Некорректный формат суммы. Пожалуйста, введите число.")
 
-def finalize_avito_order(chat_id, message_id,manager_username, state: StateContext):
+def finalize_avito_order(chat_id, message_id, manager_username, state: StateContext):
     """Финализируем заказ для Авито, включая фото и ответ на сообщение в канале."""
-    print(manager_username)
     with state.data() as order_data:
         if order_data:
-            product_dict = order_data.get("product_dict")
+            print(order_data)
+            # Используем avito_products вместо product_dict
+            avito_products = order_data.get("avito_products", {})
             gift = order_data.get("gift")
             note = order_data.get("note")
             is_need_packing = order_data.get("is_need_packing")
             sale_type = "avito"
-            avito_photos_tracks = order_data.get("avito_photos_tracks", [])
+            avito_photos_tracks = order_data.get("avito_photos_tracks", {})
             packer_id = order_data.get("pack_id")
             total_price = order_data.get("total_price")
-            print(is_need_packing)
-            print('is_need_packing')
-            if not all([product_dict, sale_type, avito_photos_tracks]):
-                bot.send_message(chat_id, "Не хватает данных для оформления заказа. Пожалуйста, начните процесс заново.")
+            if not all([avito_products, sale_type, avito_photos_tracks]):
+                bot.send_message(chat_id,
+                                 "Не хватает данных для оформления заказа. Пожалуйста, начните процесс заново.")
                 return
 
             try:
-                manager_info = get_user_info(username=manager_username)  # Убедитесь, что передаёте правильное имя пользователя
+                print(is_need_packing,packer_id,'999')
+
+                manager_info = get_user_info(username=manager_username)
                 if not manager_info:
                     bot.send_message(chat_id, "Не удалось получить информацию о менеджере.")
                     return
@@ -259,14 +307,22 @@ def finalize_avito_order(chat_id, message_id,manager_username, state: StateConte
                 manager_name = manager_info['name']
                 manager_username = manager_info['username']
 
-                # Создаем заказ в БД и получаем order_id
-                order = create_order(product_dict, gift, note, sale_type, manager_id, message_id,
-                                    avito_photos_tracks=avito_photos_tracks, packer_id=packer_id, status_order=OrderType.ACTIVE.value,
-                                    total_price=total_price)
+                # Передаем avito_products вместо product_dict
+                order = create_order(
+                    avito_products, gift, note, sale_type, manager_id, message_id,
+                    avito_photos_tracks=avito_photos_tracks,
+                    packer_id=packer_id,
+                    status_order=OrderType.ACTIVE.value,
+                    total_price=total_price
+                )
 
                 order_id = order['id']
                 product_list = order['values']
-                process_product_stock(product_dict)
+
+                # Обновляем process_product_stock для работы с avito_products
+                for track_info in avito_products.values():
+                    process_product_stock(track_info['products'])
+
 
                 # Формируем сообщение с информацией о заказе
                 if packer_id == manager_id:
@@ -297,7 +353,7 @@ def finalize_avito_order(chat_id, message_id,manager_username, state: StateConte
                 state.add_data(order_id=order_id)
                 state.add_data(avito_message=order_message)
                 state.add_data(reply_message_id=reply_message_id[0].message_id)
-
+                print(123)
                 # Уведомляем соответствующих пользователей
                 if not packer_id and is_need_packing:
                     # Если упаковщик не выбран, оповещаем всех пользователей

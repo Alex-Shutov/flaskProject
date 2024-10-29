@@ -23,7 +23,9 @@ class AvitoStates(StatesGroup):
     track_number=State()
     total_price=State()
     in_avito_photo = State()
+    avito_products=State()
     next_step=State()
+    track_price=State()
 
 
 class CourierStates(StatesGroup):
@@ -75,3 +77,4 @@ class DeliveryStates(StatesGroup):
     contact_name=State()   # объект для avito
     total_amount=State()   # объект для avito
     delivery_time=State()   # объект для avito
+    manual_date_input = State()
