@@ -220,19 +220,21 @@ def handle_track_number_manual(message: types.Message, state: StateContext):
 
         product_dict = data.get("product_dict")
         avito_products = data.get("avito_products", {})
-        track_number = data.get("track_number")
+
 
         avito_products[track_number] = product_dict
+    state.add_data(track_number=track_number)
+    state.set(track_number)
     state.add_data(avito_products=avito_products)
         # Обновляем словарь в состоянии
     state.add_data(avito_photos_tracks=avito_photos_tracks)
 
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("Да", callback_data="add_more_photos"),
-        types.InlineKeyboardButton("Нет", callback_data="no_more_photos")
+        types.InlineKeyboardButton("Да", callback_data="confirm_track_number"),
+        types.InlineKeyboardButton("Нет", callback_data="edit_track_number")
     )
-    bot.send_message(message.chat.id, "Добавить ещё фото для Авито?", reply_markup=markup)
+    bot.send_message(message.chat.id, f"Трекномер: {track_number}. Подтвердить?", reply_markup=markup)
     state.set(AvitoStates.next_step)
     # Переходим в состояние для ожидания ответа
 
@@ -353,7 +355,6 @@ def finalize_avito_order(chat_id, message_id, manager_username, state: StateCont
                 state.add_data(order_id=order_id)
                 state.add_data(avito_message=order_message)
                 state.add_data(reply_message_id=reply_message_id[0].message_id)
-                print(123)
                 # Уведомляем соответствующих пользователей
                 if not packer_id and is_need_packing:
                     # Если упаковщик не выбран, оповещаем всех пользователей
@@ -394,7 +395,8 @@ def handle_pack_order(call: types.CallbackQuery):
     if user_info:
         update_order_packer(order_id, user_info['id'])
         update_order_status(order_id, OrderType.IN_PACKING.value)
-
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("Мои заказы(в упаковке)", callback_data='orders_in_packing'))
         # Проверяем, есть ли в сообщении фото (caption)
         if call.message.photo:
             # Меняем описание под фото
@@ -402,13 +404,15 @@ def handle_pack_order(call: types.CallbackQuery):
                 f"Вы выбрали упаковать заказ #{str(order_id).zfill(4)}ㅤ\nДанный заказ вы сможете найти по кнопке \"Упаковать товар\"",
                 message_id=call.message.message_id,
                 chat_id=call.message.chat.id
+
             )
         else:
             # Меняем текст сообщения
             bot.edit_message_text(
                 f"Вы выбрали упаковать заказ #{str(order_id).zfill(4)}ㅤ\nДанный заказ вы сможете найти по кнопке \"Упаковать товар\"",
                 message_id=call.message.message_id,
-                chat_id=call.message.chat.id
+                chat_id=call.message.chat.id,
+                reply_markup=markup
             )
         reply_params = ReplyParameters(message_id=int(message_to_reply))
         # Отправляем сообщение в канал

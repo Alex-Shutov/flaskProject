@@ -31,11 +31,19 @@ DATABASE_CONFIG = {
 }
 
 
+
+
 # Flask settings
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 PORT = int(os.getenv('PORT', 5000))
 
-YANDEX_API_KEY = "f3ad3cd4-ba23-4d4b-9551-1ccf52d7b4ba"
+WAREHOUSE_LOCATION = {
+    'latitude': float(os.getenv('WAREHOUSE_LAT', '56.8519')),  # Пример координат
+    'longitude': float(os.getenv('WAREHOUSE_LON', '60.6122'))
+}
+
+
+YANDEX_API_KEY = os.getenv('YANDEX_API_KEY')
 DELIVERY_ZONES = {
     'green': {
         'base_price': 100,

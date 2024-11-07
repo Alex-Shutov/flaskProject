@@ -19,6 +19,8 @@ from utils import is_valid_command
 from middlewares.delivery_zones import DeliveryZone
 from states import DeliveryStates
 
+from handlers.handlers import delete_multiple_states
+
 # Инициализация соединения с БД
 connection = psycopg2.connect(**DATABASE_CONFIG)
 connection.set_session(autocommit=True)
@@ -39,13 +41,16 @@ class DeliveryAddressStates(StatesGroup):
     zone_id=State()
     delivery_address=State()
     zone_name = State()
+    confirm_components=State()
+    confirm_cooridnates=State()
+    confirm_full_address = State()
 
 
 
 def get_city_keyboard() -> types.ReplyKeyboardMarkup:
     """Создает клавиатуру с выбором города"""
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    markup.add(types.KeyboardButton("Екатеринбург"))
+    markup.add(types.InlineKeyboardButton("Екатеринбург"))
     return markup
 
 
@@ -57,6 +62,26 @@ def get_apartment_keyboard() -> types.InlineKeyboardMarkup:
         types.InlineKeyboardButton("Указать квартиру", callback_data="add_apartment")
     )
     return markup
+
+@bot.callback_query_handler(state=DeliveryAddressStates.waiting_for_city,func=lambda call: True )
+def handle_main_city(call:CallbackQuery,state:StateContext):
+    if not is_valid_command(call.message.text, state): return
+
+    try:
+        city = call.data.strip()
+        if not city:
+            bot.reply_to(call.message, "Пожалуйста, введите название города.")
+            return
+
+        state.add_data(city=city)
+        bot.send_message(
+            call.message.chat.id,
+            "Введите улицу:",
+        )
+        state.set(DeliveryAddressStates.waiting_for_street)
+    except Exception as e:
+        bot.reply_to(call.message, "Произошла ошибка при обработке города. Попробуйте еще раз.")
+        print(f"Error in handle_city: {e}")
 
 
 @bot.message_handler(state=DeliveryAddressStates.waiting_for_city)
@@ -74,7 +99,6 @@ def handle_city(message: Message, state: StateContext):
         bot.send_message(
             message.chat.id,
             "Введите улицу:",
-            reply_markup=types.ReplyKeyboardRemove()
         )
         state.set(DeliveryAddressStates.waiting_for_street)
     except Exception as e:
@@ -272,8 +296,16 @@ def process_full_address(message: Message, state: StateContext):
 def show_zone_confirmation(chat_id: int, zone: DeliveryZone, full_address: str,
                            components: AddressComponents, coordinates: tuple, state: StateContext):
     """Показывает сообщение с подтверждением зоны доставки и возможностью её изменения"""
+    components_dict = {
+        'city': components.city,
+        'street': components.street,
+        'house': components.house,
+        'apartment': components.apartment
+    }
     markup = types.InlineKeyboardMarkup(row_width=2)
-
+    state.add_data(confirm_components = components_dict)
+    state.add_data(confirm_coordinates = coordinates)
+    state.add_data(confirm_full_address = full_address)
     # Получаем все зоны для возможности выбора
     all_zones = zone_manager.get_all_zones()
     # Добавляем белую зону
@@ -340,32 +372,38 @@ def handle_zone_confirmation(call: CallbackQuery, state: StateContext):
     zone_name = call.data.split('_')[3]
 
     with state.data() as data:
-        address_data = data.get('temp_address_data')
-        if not address_data.get('selected_zone_id'):
-            bot.answer_callback_query(call.id, "Пожалуйста, выберите зону доставки")
-            return
+        components = data.get('confirm_components',{})
+        cooridnates = data.get('confirm_coordinates',{})
+        full_address = data.get('confirm_full_address','')
     state.add_data(zone_name=zone_name)
     state.add_data(zone_id=zone_id)
     # Создаем полные данные об адресе для сохранения в state
-    delivery_address = zone_manager.prepare_delivery_address(
-        AddressComponents(**address_data['components']),
-        address_data['coordinates']
-    )
+
+    delivery_address = zone_manager.prepare_delivery_address(AddressComponents(**components),cooridnates)
     if delivery_address:
         # Обновляем zone_id на выбранный пользователем
-        print('address_data',address_data,'address_data')
         delivery_address['zone_id'] = zone_id
 
         # Сохраняем данные в state для последующего использования
         state.add_data(delivery_address=delivery_address)
 
-        # Удаляем временные данные
-        data.pop('temp_address_data', None)
+        temp_address_data = {
+            'full_address': full_address,
+            'components': {
+                'city': components['city'],
+                'street': components['street'],
+                'house': components['house'],
+                'apartment': components['apartment']
+            },
+            'coordinates': cooridnates,
+            'selected_zone_id': delivery_address['zone_id']
+        }
+        state.add_data(temp_address_data=temp_address_data)
 
         # Редактируем сообщение, убирая клавиатуру
         bot.edit_message_text(
             f"✅ Выбрана {zone_name} зона!\n"
-            f"📍 {address_data['full_address']}\n",
+            f"📍 {full_address}\n",
             call.message.chat.id,
             call.message.message_id
         )
@@ -373,6 +411,8 @@ def handle_zone_confirmation(call: CallbackQuery, state: StateContext):
         # Переходим к следующему шагу
         bot.send_message(call.message.chat.id, "Введите контактный телефон:")
         state.set(DeliveryStates.contact_phone)
+        delete_multiple_states(state, ['confirm_components', 'confirm_coordinates', 'confirm_full_address'])
+
 
 @bot.callback_query_handler(func=lambda call: call.data == "retry_address")
 def handle_retry_address(call: CallbackQuery, state: StateContext):
@@ -389,6 +429,7 @@ def handle_retry_address(call: CallbackQuery, state: StateContext):
             reply_markup=get_city_keyboard()
         )
         state.set(DeliveryAddressStates.waiting_for_city)
+
     except Exception as e:
         bot.answer_callback_query(
             call.id,

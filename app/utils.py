@@ -12,7 +12,8 @@ import io
 import re
 from io import BytesIO
 from telebot.types import InputMediaPhoto
-
+from urllib.parse import quote
+from typing import List, Dict, Optional
 
 from app_types import SaleTypeRu,UserRole
 
@@ -32,9 +33,10 @@ def escape_markdown_v2(text):
 
 
 def format_order_message(order_id, product_list, gift, note, sale_type,
-                         manager_name, manager_username, delivery_date=None,
+                         manager_name, manager_username, delivery_date=None,  show_item_status=False,
                          delivery_time=None, delivery_address=None, delivery_note=None,zone_name=None,
-                         contact_phone=None, contact_name=None, total_price=None, avito_boxes=None,hide_track_prices=False):
+                         contact_phone=None, contact_name=None, total_price=None, avito_boxes=None,hide_track_prices=False,
+                         packer_name=None, packer_username=None,):
     """
     Форматирует сообщение о заказе с учетом типа продажи
 
@@ -77,7 +79,19 @@ def format_order_message(order_id, product_list, gift, note, sale_type,
 
             for product in track_info['products']:
                 emoji = "📦" if product.get('is_main_product') else "➕"
-                order_parts.append(f"  {emoji} {product['name']} - {product['param']}")
+                product_line = f"  {emoji} {product['name']} - {product['param']}"
+
+                if show_item_status:
+                    status = product.get('status', 'pending')
+                    status_emoji = {
+                        'pending': '⏳Ожидает',
+                        'delivered': '✅ Доставлен',
+                        'cancelled': '❌ Отменен',
+                        'refunded': '🔄 Возвращен'
+                    }.get(status, '⏳ Ожидает')
+                    product_line += f" {status_emoji}"
+
+                order_parts.append(product_line)
             order_parts.append("")  # Пустая строка между трек-номерами
 
         order_parts.append(f"\n")
@@ -89,16 +103,27 @@ def format_order_message(order_id, product_list, gift, note, sale_type,
         # Для прямых продаж и доставки
         for product in product_list:
             emoji = "📦" if product['is_main_product'] else "➕"
-            order_parts.append(f"{emoji} {product['product_name']} {product['param_title']}")
+            # product_line = f"{emoji} {product['product_name']} {product['param_title']}"
+            product_line = f"{emoji} {product.get('product_name',product.get('name'))} {product.get('param_title',product.get('param'))}"
+
+            if show_item_status:
+                status = product.get('status', 'pending')
+                status_emoji = {
+                    'pending': '⏳Ожидает',
+                    'delivered': '✅ Доставлен',
+                    'cancelled': '❌ Отменен',
+                    'refunded': '🔄 Возвращен'
+                }.get(status, '⏳ Ожидает')
+                product_line += f" {status_emoji}"
+
+            order_parts.append(product_line)
         order_parts.append(f"\n")
         if total_price:
             order_parts.append(f"💰 Сумма: {total_price} руб.\n")
-    print(2)
 
     # Добавляем подарок, если есть
     if gift:
         order_parts.append(f"🎁 Подарок: {gift}")
-    print(3)
 
     # Добавляем информацию о доставке
 
@@ -119,7 +144,8 @@ def format_order_message(order_id, product_list, gift, note, sale_type,
         order_parts.extend(delivery_parts)
 
     # Добавляем информацию о менеджере
-    order_parts.append(f"🧑‍💻 Менеджер: {manager_name} ({manager_username})")
+    order_parts.append(f"🧑‍💻 Менеджер: {manager_name} ({manager_username})\n")
+    order_parts.append(f"🧑‍💻 Упаковщик: {manager_name} ({manager_username})\n") if packer_name and packer_username else ''
 
     # Собираем все части сообщения, фильтруя пустые строки
     return '\n'.join(filter(None, order_parts))
@@ -234,7 +260,9 @@ def set_admin_commands(bot):
         types.BotCommand("/type_product", "Управление типами продуктов"),
         types.BotCommand("/product", "Управление продуктами"),
         types.BotCommand("/product_param", "Управление параметрами продуктов"),
+        types.BotCommand("/manage_stock", "Управление стоком и ценами"),
         types.BotCommand("/reports", "Отчеты"),
+        types.BotCommand("/settings", "Настройки"),
         types.BotCommand("/restart", "Перезапустить бота")
     ]
     bot.set_my_commands(admin_commands)
@@ -304,3 +332,27 @@ def normalize_time_input(time_input: str) -> str:
             return f"{times[0]} - {times[1]}"
 
     return time_input
+
+
+def generate_map_link(trip_items: List[Dict], warehouse_location: Dict) -> str:
+    """Генерирует ссылку на маршрут"""
+    # Начинаем с координат склада
+    points = [f"{warehouse_location['longitude']},{warehouse_location['latitude']}"]
+
+    # Добавляем уникальные точки доставки
+    seen_addresses = set()
+    for item in trip_items:
+        if item['coordinates'] and item['delivery_address'] not in seen_addresses:
+            points.append(f"{item['coordinates'][1]},{item['coordinates'][0]}")
+            seen_addresses.add(item['delivery_address'])
+
+    # Формируем маршрут
+    route_points = "~".join(points)
+
+    return (
+        "https://yandex.ru/maps/?"
+        f"rtext={route_points}"
+        "&rtt=auto"
+        "&z=11"
+        "&l=map"
+    )

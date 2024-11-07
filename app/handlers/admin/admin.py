@@ -20,6 +20,10 @@ from states import ReportStates
 
 from handlers.admin.reports import generate_sales_report, generate_stock_report
 
+from database import update_product_prices, get_product_params, update_product_stock
+
+from handlers.admin.genereal_report import generate_detailed_sales_report
+
 
 #
 #
@@ -512,30 +516,35 @@ def handle_is_main_product(call,state):
     # Получаем параметры типа продукта
     message = call.message
     with state.data() as data:
-        product_name=data.get("product_name")
+        product_name = data.get("product_name")
         selected_type_info = data.get('selected_type_product_info')
-        print(selected_type_info)
-        print('selected_type_info')
         type_product_params = selected_type_info.get('params', {})
-    print(selected_type_info)
+        sale_price = data.get('sale_price', 0)
+        avito_delivery_price = data.get('avito_delivery_price', 0)
+
+
     print('selected_type_info')
 
     # Проверка на наличие параметров в типе продукта
     if not type_product_params:
-        # Уведомляем о необходимости ввести параметры для свойств продукта или пропустить шаг
+        # Если параметров нет, создаём продукт без параметров
         skip_markup = types.InlineKeyboardMarkup()
         skip_markup.add(types.InlineKeyboardButton("Пропустить", callback_data="skip_product_specific_params"))
 
-        bot.send_message(message.chat.id,
-                         "Параметры типа продукта отсутствуют. Добавьте параметры для свойств продукта или пропустите шаг.\n\n"
-                         "На текущий момент поддерживаются следующие типы данных:\n"
-                         "- Строка: просто название\n"
-                         "- Перечисление: Название(параметр1, параметр2,...)\n"
-                         "- Число: +Название+\n\n"
-                         "Каждый параметр начинается с новой строки", reply_markup=skip_markup)
+        bot.send_message(
+            message.chat.id,
+            "Параметры типа продукта отсутствуют. Добавьте параметры для свойств продукта или пропустите шаг.\n\n"
+            "На текущий момент поддерживаются следующие типы данных:\n"
+            "- Строка: просто название\n"
+            "- Перечисление: Название(параметр1, параметр2,...)\n"
+            "- Число: +Название+\n\n"
+            "Каждый параметр начинается с новой строки",
+            reply_markup=skip_markup
+        )
 
         state.set(AdminStates.enter_product_specific_params)
         return
+
         # Формируем сообщение с параметрами, которые необходимо заполнить
     param_list = "\n".join(
         [f"{param_name} ({param_info['type']})" for param_name, param_info in type_product_params.items()])
@@ -551,10 +560,45 @@ def enter_product_name(message: types.Message, state: StateContext):
     product_name = message.text.strip()
     state.add_data(product_name=product_name)
 
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(types.InlineKeyboardButton("Да", callback_data="is_main_product_yes"),
-               types.InlineKeyboardButton("Нет", callback_data="is_main_product_no"))
-    bot.send_message(message.chat.id, "Является ли продукт основным в сезоне?", reply_markup=markup)
+    # Запрашиваем цену продажи
+    bot.send_message(message.chat.id, "Введите цену продажи:")
+    state.set(AdminStates.enter_sale_price)
+
+
+@bot.message_handler(state=AdminStates.enter_sale_price)
+def enter_sale_price(message: types.Message, state: StateContext):
+    try:
+        sale_price = float(message.text.strip())
+        if sale_price < 0:
+            raise ValueError("Price must be positive")
+
+        state.add_data(sale_price=sale_price)
+
+        # Запрашиваем цену доставки Авито
+        bot.send_message(message.chat.id, "Введите цену доставки Авито:")
+        state.set(AdminStates.enter_avito_price)
+
+    except ValueError:
+        bot.send_message(message.chat.id, "Введите корректную цену (положительное число)")
+
+
+@bot.message_handler(state=AdminStates.enter_avito_price)
+def enter_avito_price(message: types.Message, state: StateContext):
+    try:
+        avito_price = float(message.text.strip())
+        if avito_price < 0:
+            raise ValueError("Price must be positive")
+
+        state.add_data(avito_delivery_price=avito_price)
+
+        # Переходим к следующему шагу - является ли продукт основным
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(types.InlineKeyboardButton("Да", callback_data="is_main_product_yes"),
+                   types.InlineKeyboardButton("Нет", callback_data="is_main_product_no"))
+        bot.send_message(message.chat.id, "Является ли продукт основным в сезоне?", reply_markup=markup)
+
+    except ValueError:
+        bot.send_message(message.chat.id, "Введите корректную цену (положительное число)")
 
 
 @bot.message_handler(state=AdminStates.enter_product_params)
@@ -809,10 +853,217 @@ def generate_report(message: types.Message, state: StateContext):
         return
 
     if report_type == 'report_sales':
-        report_path = generate_sales_report(start_date, end_date,type_id)
+        # report_path = generate_sales_report(start_date, end_date,type_id)
+        report_path = generate_detailed_sales_report(start_date, end_date)
         bot.send_document(message.chat.id, open(report_path, 'rb'))
     elif report_type == 'report_stock':
         report_path = generate_stock_report(type_id)
         bot.send_document(message.chat.id, open(report_path, 'rb'))
 
     state.delete()
+
+
+@bot.message_handler(commands=['manage_stock'])
+def handle_manage_stock(message: types.Message, state: StateContext):
+    """Команда для управления стоком и ценами"""
+    type_products = get_all_type_products()
+
+    if not type_products:
+        bot.send_message(message.chat.id, "Нет доступных типов продуктов.")
+        return
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for type_product in type_products:
+        markup.add(types.InlineKeyboardButton(
+            type_product['name'],
+            callback_data=f"stock_type_{type_product['id']}"
+        ))
+    state.set(AdminStates.manage_stock_type)
+    bot.send_message(message.chat.id, "Выберите тип продукта:", reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('stock_type_'), state=AdminStates.manage_stock_type)
+def handle_stock_type_selection(call: types.CallbackQuery, state: StateContext):
+    type_id = int(call.data.split('_')[2])
+
+    # Получаем все продукты данного типа
+    products = get_all_products(type_id)
+    if not products:
+        bot.send_message(call.message.chat.id, "Нет продуктов данного типа.")
+        return
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for product in products:
+        markup.add(types.InlineKeyboardButton(
+            product['name'],
+            callback_data=f"stock_product_{product['id']}"
+        ))
+
+    state.add_data(selected_type_id=type_id)
+    state.set(AdminStates.manage_stock_product)
+
+    bot.edit_message_text(
+        "Выберите продукт:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('stock_product_'),
+                            state=AdminStates.manage_stock_product)
+def handle_stock_product_selection(call: types.CallbackQuery, state: StateContext):
+    product_id = int(call.data.split('_')[2])
+
+    # Получаем параметры продукта
+    params = get_product_params(product_id)
+    if not params:
+        bot.send_message(call.message.chat.id, "У продукта нет параметров.")
+        return
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for param in params:
+        markup.add(types.InlineKeyboardButton(
+            f"{param[1]} (Остаток: {param[2]})",
+            callback_data=f"stock_param_{param[0]}"
+        ))
+
+    state.add_data(selected_product_id=product_id)
+    state.set(AdminStates.manage_stock_param)
+
+    # Добавляем кнопку для управления ценами
+    markup.add(types.InlineKeyboardButton(
+        "💰 Управление ценами",
+        callback_data=f"manage_prices_{product_id}"
+    ))
+
+    bot.edit_message_text(
+        "Выберите параметр продукта или управление ценами:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('stock_param_'),
+                            state=AdminStates.manage_stock_param)
+def handle_stock_param_selection(call: types.CallbackQuery, state: StateContext):
+    param_id = int(call.data.split('_')[2])
+    state.add_data(selected_param_id=param_id)
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("➕ Добавить", callback_data="stock_add"),
+        types.InlineKeyboardButton("➖ Убавить", callback_data="stock_subtract")
+    )
+
+    bot.edit_message_text(
+        "Выберите действие:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
+    state.set(AdminStates.manage_stock_action)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('stock_'), state=AdminStates.manage_stock_action)
+def handle_stock_action(call: types.CallbackQuery, state: StateContext):
+    action = call.data.split('_')[1]
+    state.add_data(stock_action=action)
+
+    bot.edit_message_text(
+        "Введите количество:",
+        call.message.chat.id,
+        call.message.message_id
+    )
+
+    state.set(AdminStates.manage_stock_quantity)
+
+
+@bot.message_handler(state=AdminStates.manage_stock_quantity)
+def handle_stock_quantity(message: types.Message, state: StateContext):
+    try:
+        quantity = int(message.text)
+        if quantity < 0:
+            raise ValueError("Quantity must be positive")
+
+        with state.data() as data:
+            param_id = data['selected_param_id']
+            action = data['stock_action']
+
+        # Обновляем сток
+        success = update_product_stock(param_id, quantity, action == 'add')
+
+        if success:
+            bot.send_message(
+                message.chat.id,
+                f"✅ Сток успешно {'увеличен' if action == 'add' else 'уменьшен'} на {quantity}"
+            )
+        else:
+            bot.send_message(
+                message.chat.id,
+                "❌ Ошибка при обновлении стока. Возможно, недостаточно товара для списания."
+            )
+
+        state.delete()
+
+    except ValueError:
+        bot.reply_to(message, "Введите положительное целое число.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('manage_prices_'))
+def handle_manage_prices(call: types.CallbackQuery, state: StateContext):
+    product_id = int(call.data.split('_')[2])
+    state.add_data(selected_product_id=product_id)
+
+    product_info = get_product_info_with_params(product_id)
+    current_prices = (
+        f"Текущие цены:\n"
+        f"Продажа: {product_info.get('sale_price', '0')} руб.\n"
+        f"Авито доставка: {product_info.get('avito_delivery_price', '0')} руб.\n\n"
+        f"Введите новые цены через запятую (продажа, авито):"
+    )
+
+    bot.edit_message_text(
+        current_prices,
+        call.message.chat.id,
+        call.message.message_id
+    )
+
+    state.set(AdminStates.manage_prices)
+
+
+@bot.message_handler(state=AdminStates.manage_prices)
+def handle_prices_update(message: types.Message, state: StateContext):
+    try:
+        # Парсим цены из сообщения
+        prices = [float(price.strip()) for price in message.text.split(',')]
+        if len(prices) != 2:
+            raise ValueError("Need exactly two prices")
+
+        sale_price, avito_price = prices
+
+        with state.data() as data:
+            product_id = data['selected_product_id']
+
+        # Обновляем цены
+        success = update_product_prices(product_id, sale_price, avito_price)
+
+        if success:
+            bot.reply_to(
+                message,
+                f"✅ Цены успешно обновлены:\n"
+                f"Продажа: {sale_price} руб.\n"
+                f"Авито доставка: {avito_price} руб."
+            )
+        else:
+            bot.reply_to(message, "❌ Ошибка при обновлении цен.")
+
+        state.delete()
+
+    except ValueError:
+        bot.reply_to(
+            message,
+            "Неверный формат. Введите два числа через запятую (например: 1000, 1500)"
+        )

@@ -14,7 +14,7 @@ from app_types import SaleType
 from database import get_product_with_type
 
 from database import get_detailed_orders
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Border, Side, Alignment, Font
 from openpyxl.utils import get_column_letter
 
 
@@ -213,23 +213,40 @@ def generate_sales_report(start_date, end_date, type_id, filename="sales_report.
 def generate_stock_report(type_id):
     # Получаем данные о всех типах продуктов и их остатках
     products = get_all_products_with_stock(type_id)
-    # Создаем рабочую книгу Excel
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Stock Report"
 
     # Цвета для разных типов параметров
-    type_param_fill = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")  # Голубой для параметров типа
-    product_param_fill = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")  # Зеленый для параметров продукта
+    type_param_fill = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")
+    product_param_fill = PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid")
+    price_fill = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
+    main_product_fill = PatternFill(start_color="DDA0DD", end_color="DDA0DD", fill_type="solid")
 
-    headers = ["Продукт","Свойство продукта", "Остаток"]
+    headers = [
+        "Продукт",
+        "Свойство продукта",
+        "Основной продукт",
+        "Цена продажи",
+        "Цена авито доставки",
+        "Остаток"
+    ]
+
+    # Создаем множества для хранения уникальных параметров,
+    # исключая direct_price и delivery_price из параметров продукта
     product_columns = set()
     property_columns = set()
 
     # Собираем уникальные ключи параметров из всех продуктов
     for product_type, items in products.items():
         for item in items:
-            product_columns.update(item.get('product_values', {}).keys())
+            product_values = item.get('product_values', {}).copy()
+            # Удаляем цены из параметров продукта, так как они будут отдельными колонками
+            if 'direct_price' in product_values:
+                product_values.pop('direct_price')
+            if 'delivery_price' in product_values:
+                product_values.pop('delivery_price')
+            product_columns.update(product_values.keys())
             property_columns.update(item.get('product_param_values', {}).keys())
 
     # Объединяем все ключи параметров в заголовки
@@ -243,12 +260,25 @@ def generate_stock_report(type_id):
             product_name = item['name']
             stock = item['stock']
             param_title = item['param_title']
+            is_main_product = "Да" if item.get('is_main_product', False) else "Нет"
+
+            # Копируем product_values, чтобы не изменять оригинальный словарь
+            product_values = item.get('product_values', {}).copy()
+            # Извлекаем цены
+            sale_price = product_values.pop('direct_price', '-')
+            avito_delivery_price = product_values.pop('delivery_price', '-')
 
             # Основные данные строки
-            row = [product_name,param_title,stock]
+            row = [
+                product_name,
+                param_title,
+                is_main_product,
+                sale_price,
+                avito_delivery_price,
+                stock
+            ]
 
-            # Добавляем параметры продукта
-            product_values = item.get('product_values', {})
+            # Добавляем оставшиеся параметры продукта
             for col in product_columns:
                 value = product_values.get(col, '-')
                 row.append(value)
@@ -259,15 +289,31 @@ def generate_stock_report(type_id):
                 value = product_param_values.get(col, '-')
                 row.append(value)
 
-            # Добавляем строку в лист
             sheet.append(row)
 
-    # Применение цветов к параметрам
-    for col_index, col_name in enumerate(headers[3:], start=3):
+    # Применение цветов к колонкам
+    # Основной продукт
+    for cell in sheet[get_column_letter(3)]:
+        if cell.row > 1:
+            cell.fill = main_product_fill
+
+    # Цены
+    for col in range(4, 6):  # Колонки с ценами
+        for cell in sheet[get_column_letter(col)]:
+            if cell.row > 1:
+                cell.fill = price_fill
+
+    # Параметры продукта и свойств
+    for col_index, col_name in enumerate(headers[6:], start=6):
         fill = type_param_fill if col_name in product_columns else product_param_fill
         for cell in sheet[get_column_letter(col_index + 1)]:
-            if cell.row > 1:  # Пропускаем заголовок
+            if cell.row > 1:
                 cell.fill = fill
+
+    # Применяем форматирование
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal='center')
 
     # Устанавливаем автоширину для всех столбцов
     for col in range(1, len(headers) + 1):
@@ -275,10 +321,17 @@ def generate_stock_report(type_id):
         adjusted_width = (max_length + 2)
         sheet.column_dimensions[get_column_letter(col)].width = adjusted_width
 
-    # Удаляем лишние страницы, если они есть
-    if len(workbook.sheetnames) > 1:
-        for sheetname in workbook.sheetnames[1:]:
-            workbook.remove(workbook[sheetname])
+    # Добавляем границы
+    thin_border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+
+    for row in sheet.iter_rows(min_row=1, max_row=sheet.max_row, min_col=1, max_col=len(headers)):
+        for cell in row:
+            cell.border = thin_border
 
     # Сохраняем файл
     report_path = "stock_report.xlsx"

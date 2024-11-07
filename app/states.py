@@ -34,6 +34,15 @@ class CourierStates(StatesGroup):
     reply_message_id=State()
     picked_order=State()
     message_to_edit=State()
+    waiting_for_route_location = State()
+    selecting_delivered_items = State()  # выбор доставленных товаров
+    entering_delivery_sum = State()      # ввод суммы доставки
+    entering_delivery_note = State()     # ввод заметки
+    viewing_order = State()              # просмотр заказа
+    viewing_trip = State()               # просмотр поездки
+    waiting_for_invoice = State()  # ожидание фото накладной
+    processing_avito = State()  # обработка авито заказа
+
 
 class AppStates(StatesGroup):
     user_info=State()
@@ -63,6 +72,16 @@ class AdminStates(StatesGroup):
     enter_product_stock=State()
     enter_product_param_title=State()
     selected_type_product_info=State()
+    manage_stock_type = State()
+    manage_stock_product = State()
+    manage_stock_param = State()
+    manage_stock_action = State()
+    manage_stock_quantity = State()
+    manage_prices = State()
+    enter_sale_price = State()
+    enter_avito_price = State()
+    editing_setting=State()
+    edit_setting=State()
 
 class ReportStates(StatesGroup):
     report_type_id = State()

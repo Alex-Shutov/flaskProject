@@ -1,5 +1,7 @@
 from flask import Flask, request
 from telebot import types,custom_filters
+
+from shedule import start_scheduler
 from config import BOT_TOKEN, WEBHOOK_URL, DEBUG, PORT
 from bot import get_bot_instance
 from telebot.states.sync.middleware import StateMiddleware
@@ -28,6 +30,7 @@ def remove_webhook():
 
 if __name__ == '__main__':
     # Проверяем, установлен ли вебхук
+    start_scheduler()
     webhook_info = bot.get_webhook_info()
     bot.add_custom_filter(custom_filters.StateFilter(bot))
 

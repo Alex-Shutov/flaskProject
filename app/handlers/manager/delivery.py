@@ -220,8 +220,11 @@ def handle_delivery_time(message: Message, state: StateContext):
 
         # Передаем управление в модуль address.py
         state.set(DeliveryAddressStates.waiting_for_city)
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add("Екатеринбург")
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(
+                "Екатеринбург",
+                callback_data=f"Екатеринбург"
+            ))
         bot.send_message(
             message.chat.id,
             "Введите город доставки:",
@@ -381,10 +384,11 @@ def finalize_delivery_order(chat_id,message_id,username, state: StateContext):
                 manager_username=manager_info['username'],
                 delivery_date=order_data.get('delivery_date'),
                 delivery_time=order_data.get('delivery_time'),
-                delivery_address=order_data.get('full_address'),
+                delivery_address=order_data.get('full_address', order_data.get('delivery_address')['full_address']),
                 contact_phone=order_data.get('contact_phone'),
                 contact_name=order_data.get('contact_name'),
-                total_price=order_data.get('total_amount')
+                total_price=order_data.get('total_amount'),
+                zone_name=order_data.get('zone_name'),
             )
             # Отправляем сообщение менеджеру
             bot.send_message(chat_id, order_message)
@@ -395,7 +399,6 @@ def finalize_delivery_order(chat_id,message_id,username, state: StateContext):
             # Обновляем message_id в заказе
             update_order_message_id(order_id, channel_message.message_id)
 
-            print(order_data,'\n\n',order_data.get('temp_address_data')['components'],'\n\n',order_data.get('temp_address_data')['coordinates'])
             zone_manager.save_delivery_address(order_id,
                                             order_data.get('temp_address_data')['components'],
                                             order_data.get('temp_address_data')['coordinates'])

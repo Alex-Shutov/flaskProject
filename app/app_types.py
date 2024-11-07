@@ -21,6 +21,7 @@ class OrderType(Enum):
     IN_DELIVERY='in_delivery'
     IN_PACKING='in_packing'
     READY_TO_DELIVERY='ready_to_delivery'
+    PARTLY_DELIVERED = 'partly_delivered'
     CLOSED='closed'
     REFUND='refund'
 
@@ -29,6 +30,21 @@ class OrderTypeRu(Enum):
     IN_DELIVERY = 'В доставке'
     IN_PACKING='На упаковке'
     READY_TO_DELIVERY='Готов к доставке'
+    PARTLY_DELIVERED = 'Частично доставлен'
     CLOSED = 'Закрыт'
     REFUND = 'Возврат'
+
+class TripStatus(Enum):
+    CREATED = 'created'
+    IN_PROGRESS = 'in_progress'
+    COMPLETED = 'completed'
+    CANCELLED = 'cancelled'
+
+class TripStatusRu(Enum):
+    CREATED = 'Создана'
+    IN_PROGRESS = 'В процессе'
+    COMPLETED = 'Завершена'
+    CANCELLED = 'Отменена'
+
+
 

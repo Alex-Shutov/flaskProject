@@ -48,6 +48,8 @@ from database import get_avito_photos
 
 from handlers.manager.delivery import finalize_delivery_order
 
+from app_types import OrderTypeRu
+
 bot = get_bot_instance()
 
 @bot.message_handler(commands=['restart'])
@@ -103,10 +105,6 @@ def handle_orders(message: types.Message, state: StateContext):
     markup.add(types.InlineKeyboardButton("Упаковка товара", callback_data='orders_pack'))
 
     # Дополнительные кнопки для курьеров
-    if UserRole.COURIER.value in user_info['roles'] or  UserRole.ADMIN.value in user_info['roles']:
-        markup.add(types.InlineKeyboardButton("Доставка товара", callback_data='orders_delivery'))
-
-    # Все кнопки доступны админам
 
     state.set(AppStates.picked_action)
     bot.send_message(message.chat.id, "Выберите действие:", reply_markup=markup)
@@ -125,7 +123,6 @@ def handle_order_history(call: types.CallbackQuery, state: StateContext):
     bot.send_message(call.message.chat.id, "Введите диапазон дат в формате день.месяц.год(01.01.2000)-день.месяц.год(10.10.2000):")
     state.set(AppStates.enter_date_range)
 
-
 @bot.message_handler(state=AppStates.enter_date_range)
 def process_date_range(message: types.Message, state: StateContext):
     date_range = message.text
@@ -136,24 +133,67 @@ def process_date_range(message: types.Message, state: StateContext):
         return
 
     start_date, end_date = dates
-    state.set(AppStates.start_date)
-    state.add_data(start_date=start_date.strftime("%d.%m.%Y"), end_date=end_date.strftime("%d.%m.%Y"))
+    state.add_data(start_date=start_date.strftime("%Y-%m-%d"), end_date=end_date.strftime("%Y-%m-%d"))
 
     # Показываем кнопки для истории заказов
     markup = types.InlineKeyboardMarkup()
     user_info = get_user_by_username(message.from_user.username, state)
-    markup.add(types.InlineKeyboardButton("Упакованные заказы", callback_data='orders_packed'))
-
-    # Кнопки для менеджеров
-    if UserRole.MANAGER.value or UserRole.ADMIN.value in user_info['roles'] :
-        markup.add(types.InlineKeyboardButton("Проданные товары", callback_data='orders_sold'))
-
-    # Кнопки для курьеров
-    if UserRole.COURIER.value or UserRole.ADMIN.value in user_info['roles']:
-        markup.add(types.InlineKeyboardButton("Доставленные товары", callback_data='orders_delivered'))
+    markup.add(
+        types.InlineKeyboardButton("Упакованные заказы", callback_data='orders_packed'),
+        types.InlineKeyboardButton("Оформленные заказы", callback_data='orders_created')
+    )
 
     bot.send_message(message.chat.id, "Выберите тип истории заказов:", reply_markup=markup)
+    state.set(AppStates.start_date)
 
+
+@bot.callback_query_handler(func=lambda call: call.data == 'orders_created', state=AppStates.start_date)
+def show_created_orders(call: types.CallbackQuery, state: StateContext):
+    with state.data() as data:
+        start_date = data['start_date']
+        end_date = data['end_date']
+
+    user_info = get_user_by_username(call.from_user.username, state)
+
+    # Получаем все заказы пользователя за период
+    orders = get_orders(
+        order_type=['avito', 'delivery', 'direct'],
+        username=call.message.json['chat']['username'],
+        start_date=start_date,
+        end_date=end_date,
+        status=['active','closed','in_delivery','in_packing','ready_to_delivery','refund','partly_delivered'],
+        role='manager'  # Указываем роль manager для получения созданных заказов
+    )
+
+    if not orders:
+        bot.send_message(call.message.chat.id, "За данный период не найдено оформленных заказов")
+        return
+
+    for order in orders:
+        try:
+            order_message = format_order_message(
+                order_id=order['id'],
+                product_list=order['products'].get('no_track', []).get('products') if order['order_type'] != 'avito' else order['products'],
+                gift=order['gift'],
+                note=order['note'],
+                hide_track_prices=True,
+                sale_type=order['order_type'],
+                manager_name=order['manager_name'],
+                manager_username=order['manager_username'],
+                delivery_date=order.get('delivery_date'),
+                delivery_time=order.get('delivery_time'),
+                delivery_address=order.get('delivery_address'),
+                contact_phone=order.get('contact_phone'),
+                contact_name=order.get('contact_name'),
+                total_price=order.get('total_price'),
+                avito_boxes=order.get('avito_boxes')
+            )
+            bot.send_message(call.message.chat.id,
+                             f"{order_message}\nСтатус: {OrderTypeRu[order['status'].upper()].value}")
+
+        except Exception as e:
+            print(f"Error processing order {order['id']}: {str(e)}")
+            continue
 
 # Обработчик упакованных заказов
 @bot.callback_query_handler(func=lambda call: call.data == 'orders_packed', state=AppStates.start_date)
@@ -163,16 +203,41 @@ def show_packed_orders(call: types.CallbackQuery, state: StateContext):
         end_date = data['end_date']
     user_info = get_user_by_username(call.from_user.username, state)
     orders = get_orders(username=call.from_user.username, order_type=[SaleType.DIRECT.value,SaleType.DELIVERY.value,SaleType.AVITO.value],
-                        status=[OrderType.CLOSED.value, OrderType.REFUND.value, OrderType.READY_TO_DELIVERY.value, OrderType.IN_DELIVERY.value], start_date=start_date,
+                        role='packer',
+                        status=['active', 'closed', 'in_delivery', 'in_packing', 'ready_to_delivery', 'refund',
+                                'partly_delivered'], start_date=start_date,
                         end_date=end_date)
     if not orders:
         bot.send_message(call.message.chat.id, "За данный период не найдено упакованных заказов")
 
     for order in orders:
-        order_message = format_order_message(order['id'], order['product_id'], order['product_param_id'], order['gift'],
-                                             order['note'], order['order_type'], user_info['name'],
-                                             user_info['username'])
-        bot.send_message(call.message.chat.id, order_message)
+        try:
+            order_message = format_order_message(
+                order_id=order['id'],
+                product_list=order['products'].get('no_track', []).get('products') if order[
+                                                                                          'order_type'] != 'avito' else
+                order['products'],
+                gift=order['gift'],
+                note=order['note'],
+                hide_track_prices=True,
+                sale_type=order['order_type'],
+                manager_name=order['manager_name'],
+                manager_username=order['manager_username'],
+                packer_name=order['packer_name'],
+                packer_username=order['packer_username'],
+                delivery_date=order.get('delivery_date'),
+                delivery_time=order.get('delivery_time'),
+                delivery_address=order.get('delivery_address'),
+                contact_phone=order.get('contact_phone'),
+                contact_name=order.get('contact_name'),
+                total_price=order.get('total_price'),
+                avito_boxes=order.get('avito_boxes')
+            )
+            bot.send_message(call.message.chat.id,
+                             f"{order_message}\nСтатус: {OrderTypeRu[order['status'].upper()].value}")
+        except Exception as e:
+            print(f"Error processing order {order['id']}: {str(e)}")
+            continue
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'orders_pack_goods', state=AppStates.picked_action)
@@ -188,7 +253,9 @@ def show_active_orders_without_packer(call: types.CallbackQuery, state: StateCon
         try:
             order_message = format_order_message(
                 order_id=order['id'],
-                product_list=order['products'],
+                product_list=order['products'].get('no_track', []).get('products') if order[
+                                                                                          'order_type'] != 'avito' else
+                order['products'],
                 gift=order['gift'],
                 note=order['note'],
                 sale_type=order['order_type'],
@@ -233,7 +300,9 @@ def show_packing_orders(call: types.CallbackQuery, state: StateContext):
         try:
             order_message = format_order_message(
                 order_id=order['id'],
-                product_list=order['products'],
+                product_list=order['products'].get('no_track', []).get('products') if order[
+                                                                                          'order_type'] != 'avito' else
+                order['products'],
                 gift=order['gift'],
                 note=order['note'],
                 sale_type=order['order_type'],
@@ -262,6 +331,7 @@ def show_packing_orders(call: types.CallbackQuery, state: StateContext):
                 if photos:
                     media = create_media_group(photos, order_message)
                     bot.send_media_group(call.message.chat.id, media)
+
                     bot.send_message(call.message.chat.id, "Если вы хотите упаковать этот заказ, нажмите на кнопку ниже:", reply_markup=markup)
             else:
                 bot.send_message(call.message.chat.id, order_message, reply_markup=markup)
@@ -281,7 +351,7 @@ def handle_pack_goods(call: types.CallbackQuery):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("Упаковал", callback_data=f"packed_{order_id}_{message_to_reply}"))
 
-    bot.send_message(call.message.chat.id, "Проверьте, что вы положили:\n1. Подставка с 3 болтами\n2. Ярусы елки\n3. Подарок", reply_markup=markup)
+    bot.edit_message_text( "Проверьте, что вы положили:\n1. Подставка с 3 болтами\n2. Ярусы елки\n3. Подарок\n4. Допники", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('packed_'))
 def handle_packed_order(call: types.CallbackQuery, state: StateContext):

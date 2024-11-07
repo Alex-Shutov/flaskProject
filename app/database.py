@@ -1,5 +1,6 @@
 import datetime
 import json
+from typing import List, Dict, Optional
 
 import psycopg2
 
@@ -277,10 +278,9 @@ def get_couriers():
             return couriers_dict
 
 
-def get_orders(order_type=None, username=None, status=None, is_courier_null=False, start_date=None, end_date=None, role=None):
+def get_orders(order_type=None, username=None, status=None, is_courier_null=False, start_date=None, end_date=None, role=None, item_status=None):
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            # Базовый запрос с подзапросом для получения продуктов
             query = """
                 WITH products_grouped AS (
                     SELECT 
@@ -290,14 +290,27 @@ def get_orders(order_type=None, username=None, status=None, is_courier_null=Fals
                             jsonb_build_object(
                                 'product_id', p.id,
                                 'name', p.name,
+                                'status', oi.status,
                                 'is_main_product', oi.is_main_product,
-                                'param', pp.title
+                                'param', pp.title,
+                                'param_id', pp.id
                             )
                         ) as product_list,
                         MAX(oi.track_price) as track_price
                     FROM order_items oi
                     JOIN products p ON oi.product_id = p.id
                     JOIN product_params pp ON oi.product_param_id = pp.id
+                    WHERE 1=1
+                    """
+
+            params = []
+
+            # Добавляем фильтрацию по статусу товаров в CTE с явным приведением типа
+            if item_status and isinstance(item_status, list):
+                query += " AND oi.status::text = ANY(%s)"  # Изменено здесь
+                params.append(item_status)
+
+            query += """
                     GROUP BY oi.order_id, oi.tracking_number
                 ),
                 final_products AS (
@@ -318,22 +331,24 @@ def get_orders(order_type=None, username=None, status=None, is_courier_null=Fals
                        o.delivery_date, o.delivery_time, o.delivery_address, o.delivery_note, 
                        o.contact_phone, o.contact_name, o.total_price, o.avito_boxes_count,
                        fp.products,
-                       m.name as manager_name, m.username as manager_username
+                        m.name as manager_name, m.username as manager_username,
+                       p.name as packer_name, p.username as packer_username,
+                       c.name as courier_name, c.username as courier_username
                 FROM orders o
                 LEFT JOIN final_products fp ON o.id = fp.order_id
                 LEFT JOIN users m ON o.manager_id = m.id
+                LEFT JOIN users p ON o.packer_id = p.id
+                LEFT JOIN users c ON o.courier_id = c.id
                 WHERE 1=1
             """
 
-            params = []
-
-            # Добавляем условия фильтрации
+            # Добавляем остальные условия фильтрации
             if order_type and isinstance(order_type, list):
                 query += " AND o.order_type = ANY(%s)"
                 params.append(order_type)
 
             if status and isinstance(status, list):
-                query += " AND o.status = ANY(%s::public.status_order[])"
+                query += " AND o.status::text = ANY(%s)"  # Изменено здесь тоже
                 params.append(status)
 
             if username:
@@ -342,11 +357,14 @@ def get_orders(order_type=None, username=None, status=None, is_courier_null=Fals
                 user_id = cursor.fetchone()
                 if not user_id:
                     return []
-                if role == 'courier':
-                    query += " AND o.courier_id = %s"
-                elif role == 'packer':
-                    query += " AND o.packer_id = %s"
-                params.append(user_id[0])
+                if role:
+                    if role == 'courier':
+                        query += " AND o.courier_id = %s"
+                    elif role == 'packer':
+                        query += " AND o.packer_id = %s"
+                    elif role == 'manager':
+                        query += " AND o.manager_id = %s"
+                    params.append(user_id[0])
 
             if is_courier_null:
                 query += " AND o.courier_id IS NULL"
@@ -356,7 +374,6 @@ def get_orders(order_type=None, username=None, status=None, is_courier_null=Fals
                 params.append(start_date)
                 params.append(end_date)
 
-            # Добавляем сортировку
             query += " ORDER BY o.id DESC"
 
             cursor.execute(query, tuple(params) if params else None)
@@ -368,7 +385,7 @@ def get_orders(order_type=None, username=None, status=None, is_courier_null=Fals
                 formatted_order = {
                     'id': order[0],
                     'gift': order[1],
-                    'note': order[2],
+                    'note': order[2] if order[2] else 'Не указано',
                     'order_type': order[3],
                     'status': order[4],
                     'created_at': order[5],
@@ -387,7 +404,11 @@ def get_orders(order_type=None, username=None, status=None, is_courier_null=Fals
                     'avito_boxes': order[18],
                     'products': order[19] if order[19] else {},  # Теперь это уже сгруппированный объект
                     'manager_name': order[20],
-                    'manager_username': order[21]
+                    'manager_username': order[21],
+                    'packer_name': order[22] or 'Не назначен',
+                    'packer_username': order[23] or 'Не назначен',
+                    'courier_name': order[24] or 'Не назначен',
+                    'courier_username': order[25] or 'Не назначен'
                 }
 
                 # Преобразование products уже не требуется, так как группировка
@@ -406,18 +427,31 @@ def get_avito_photos(order_id):
             )
             return [row[0] for row in cursor.fetchall()]
 
-def update_order_status(order_id, status):
+def update_order_status(order_id, status, with_order_items=True):
     with get_connection() as conn:
         with conn.cursor() as cursor:
             # Обновляем статус заказа
             cursor.execute("UPDATE orders SET status = %s::public.status_order WHERE id = %s", (status, order_id))
-
-            # Обновляем статус всех продуктов в комплектации заказа
-            cursor.execute("UPDATE order_items SET status = %s::public.status_order WHERE order_id = %s", (status, order_id))
+            if with_order_items:
+                if status == 'closed':
+                    # Для статуса closed обновляем только те order_items,
+                    # которые не имеют статус refund или declined
+                    cursor.execute("""
+                        UPDATE order_items 
+                        SET status = %s::public.status_order 
+                        WHERE order_id = %s 
+                        AND status::text NOT IN ('refund', 'declined')
+                    """, (status, order_id))
+                else:
+                    # Для остальных статусов обновляем все order_items
+                    cursor.execute("""
+                        UPDATE order_items 
+                        SET status = %s::public.status_order 
+                        WHERE order_id = %s
+                    """, (status, order_id))
 
             # Сохраняем изменения
             conn.commit()
-
 def get_product_by_id(product_id):
     """
        Получает всю информацию о продукте по его идентификатору.
@@ -493,18 +527,39 @@ def update_order_courier(order_id, courier_id):
             conn.commit()
 
 
-def update_order_invoice_photo(order_id, photo_path):
-    """Обновляет путь к фотографии накладной в заказе."""
+def update_order_invoice_photo(order_id: int, tracking_number: str, photo_path: str) -> bool:
+    """
+    Обновляет путь к фотографии накладной в таблице avito_photos.
+
+    Args:
+        order_id: ID заказа
+        tracking_number: Трек-номер Авито
+        photo_path: Путь к сохраненной фотографии
+
+    Returns:
+        bool: True если обновление прошло успешно, False в случае ошибки
+    """
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            query = """
-                UPDATE orders
-                SET invoice_photo = %s
-                WHERE id = %s
-            """
-            cursor.execute(query, (photo_path, order_id))
-            conn.commit()
+            try:
+                query = """
+                    UPDATE avito_photos
+                    SET invoice_photo = %s
+                    WHERE order_id = %s AND tracking_number = %s
+                    RETURNING id
+                """
+                cursor.execute(query, (photo_path, order_id, tracking_number))
 
+                # Проверяем, была ли обновлена запись
+                result = cursor.fetchone()
+                conn.commit()
+
+                return result is not None
+
+            except Exception as e:
+                print(f"Error updating avito invoice photo: {e}")
+                conn.rollback()
+                return False
 
 def get_all_users(roles=None):
     """
@@ -659,12 +714,34 @@ def get_active_orders_without_packer():
             return formatted_orders
 
 
-def get_order_by_id(order_id):
+def get_delivery_zone_for_order(order_id):
+    """Получает информацию о зоне доставки для заказа"""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            query = """
+                SELECT dz.name, dz.base_price, dz.additional_item_price
+                FROM delivery_addresses da
+                JOIN delivery_zones dz ON da.zone_id = dz.id
+                WHERE da.order_id = %s
+            """
+            cursor.execute(query, (order_id,))
+            result = cursor.fetchone()
+
+            if result:
+                return {
+                    'name': result[0],
+                    'base_price': result[1],
+                    'additional_item_price': result[2]
+                }
+            return None
+
+def get_order_by_id(order_id, item_statuses=None):
     """
     Возвращает заказ по его ID со всеми связанными данными.
 
     Args:
         order_id: ID заказа
+        item_statuses: Список статусов для фильтрации товаров (опционально)
     Returns:
         dict: Словарь с данными заказа или None
     """
@@ -677,10 +754,13 @@ def get_order_by_id(order_id):
                         oi.tracking_number,
                         jsonb_agg(
                             jsonb_build_object(
+                                'order_item_id', oi.id,
                                 'product_id', p.id,
                                 'name', p.name,
                                 'is_main_product', oi.is_main_product,
-                                'param', pp.title
+                                'param', pp.title,
+                                'param_id', pp.id,
+                                'status', oi.status
                             )
                         ) as product_list,
                         MAX(oi.track_price) as track_price
@@ -688,6 +768,15 @@ def get_order_by_id(order_id):
                     JOIN products p ON oi.product_id = p.id
                     JOIN product_params pp ON oi.product_param_id = pp.id
                     WHERE oi.order_id = %s
+                """
+            params = [order_id]
+
+            # Добавляем фильтрацию по статусам, если они указаны
+            if item_statuses and isinstance(item_statuses, list):
+                query += " AND oi.status::text = ANY(%s)"
+                params.append(item_statuses)
+
+            query += """
                     GROUP BY oi.order_id, oi.tracking_number
                 ),
                 final_products AS (
@@ -731,14 +820,16 @@ def get_order_by_id(order_id):
                 LEFT JOIN users m ON o.manager_id = m.id
                 WHERE o.id = %s
             """
-            cursor.execute(query, (order_id, order_id))
+            params.append(order_id)  # Добавляем order_id второй раз для WHERE условия в основном запросе
+
+            cursor.execute(query, params)
             order = cursor.fetchone()
 
             if order:
                 formatted_order = {
                     'id': order[0],
                     'gift': order[1],
-                    'note': order[2],
+                    'note': order[2] if order[2] else "Не указано",
                     'order_type': order[3],
                     'status': order[4],
                     'created_at': order[5],
@@ -1091,8 +1182,18 @@ def get_all_products_with_stock(type_id=None):
     with get_connection() as conn:
         with conn.cursor() as cursor:
             query = """
-                SELECT p.id, p.name, tp.title AS type_name, p.product_values, pp.title AS param_title, 
-                       pp.param_values, pp.stock , pp.title
+                SELECT 
+                    p.id, 
+                    p.name, 
+                    tp.title AS type_name, 
+                    p.product_values, 
+                    pp.title AS param_title,
+                    pp.param_values, 
+                    pp.stock, 
+                    pp.title,
+                    p.is_main_product,
+                    p.sale_price,
+                    p.avito_delivery_price
                 FROM products p
                 JOIN type_product tp ON p.type_id = tp.id
                 LEFT JOIN product_params pp ON pp.product_id = p.id
@@ -1111,11 +1212,20 @@ def get_all_products_with_stock(type_id=None):
                 product_id = row[0]
                 product_name = row[1]
                 product_type = row[2]
-                # Проверяем, что данные существуют и обрабатываем их
                 product_values = row[3] if isinstance(row[3], dict) else (json.loads(row[3]) if row[3] else {})
                 product_param_values = row[5] if isinstance(row[5], dict) else (json.loads(row[5]) if row[5] else {})
                 stock = row[6]
                 param_title = row[7]
+                is_main_product = row[8]
+                direct_price = row[9]
+                delivery_price = row[10]
+
+                # Добавляем цены в product_values
+                product_values.update({
+                    'direct_price': direct_price,
+                    'delivery_price': delivery_price,
+                })
+
                 # Если тип продукта еще не был добавлен, инициализируем его
                 if product_type not in products_by_type:
                     products_by_type[product_type] = []
@@ -1126,8 +1236,9 @@ def get_all_products_with_stock(type_id=None):
                     'name': product_name,
                     'product_values': product_values,
                     'product_param_values': product_param_values,
-                    'stock': stock,
-                    'param_title':param_title
+                    'stock': stock if stock else 0,
+                    'param_title': param_title,
+                    'is_main_product': is_main_product
                 })
 
             return products_by_type
@@ -1284,3 +1395,449 @@ def get_product_param_info(product_param_id):
                     'param_values': result[1] if isinstance(result[1], dict) else json.loads(result[1])
                 }
     return {}
+
+
+def get_order_item_info(order_item_id: int):
+    """
+    Получает информацию о товаре заказа по его ID.
+
+    Args:
+        order_item_id: ID товара в заказе
+
+    Returns:
+        Dict с информацией о товаре или None
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            query = """
+                SELECT 
+                    oi.id,
+                    oi.product_name,
+                    oi.product_param_title,
+                    oi.product_values,
+                    o.order_type
+                FROM order_items oi
+                JOIN orders o ON oi.order_id = o.id
+                WHERE oi.id = %s
+            """
+            cursor.execute(query, (order_item_id,))
+            result = cursor.fetchone()
+
+            if result:
+                return {
+                    'id': result[0],
+                    'product_name': result[1],
+                    'param_title': result[2],
+                    'product_values': result[3],
+                    'order_type': result[4]
+                }
+            return None
+
+
+def update_order_item_status(item_id: int, status: str) -> bool:
+    """
+    Обновляет статус товара в заказе
+
+    Args:
+        item_id: ID товара
+        status: Новый статус
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                query = """
+                    UPDATE order_items 
+                    SET status = %s::status_order
+                    WHERE id = %s
+                """
+                cursor.execute(query, (status, item_id))
+                conn.commit()
+                return True
+            except Exception as e:
+                print(f"Error updating order item status: {e}")
+                return False
+
+
+def get_trip_items_for_order(order_id: int, status: str = None) -> List[Dict]:
+    """
+    Получает товары заказа в текущей поездке
+
+    Args:
+        order_id: ID заказа
+        status: Опциональный фильтр по статусу
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                query = """
+                    SELECT 
+                        ti.id,
+                        ti.status as trip_item_status,
+                        oi.id as order_item_id,
+                        oi.product_name,
+                        oi.product_param_title as param_title,
+                        oi.status as order_item_status,
+                        o.order_type,
+                        o.delivery_address
+                    FROM trip_items ti
+                    JOIN order_items oi ON ti.order_item_id = oi.id
+                    JOIN orders o ON oi.order_id = o.id
+                    WHERE oi.order_id = %s
+                    AND oi.status = ANY(ARRAY['ready_to_delivery', 'in_delivery', 'partly_delivered']::status_order[])
+                """
+                params = [order_id]
+
+                if status:
+                    query += " AND oi.status = %s::status_order"
+                    params.append(status)
+
+                cursor.execute(query, params)
+                items = cursor.fetchall()
+
+                return [{
+                    'id': item[0],
+                    'trip_status': item[1],
+                    'order_item_id': item[2],
+                    'product_name': item[3],
+                    'param_title': item[4],
+                    'status': item[5],
+                    'order_type': item[6],
+                    'delivery_address': item[7]
+                } for item in items]
+
+            except Exception as e:
+                print(f"Error getting trip items for order: {e}")
+                return []
+
+
+def check_order_completion(order_id: int) -> bool:
+    """
+    Проверяет, все ли товары заказа доставлены
+
+    Args:
+        order_id: ID заказа
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                query = """
+                    SELECT COUNT(*) as total,
+                           COUNT(CASE WHEN status = 'closed' THEN 1 END) as closed
+                    FROM order_items
+                    WHERE order_id = %s
+                """
+                cursor.execute(query, (order_id,))
+                result = cursor.fetchone()
+                return result[0] == result[1]  # True если все товары закрыты
+
+            except Exception as e:
+                print(f"Error checking order completion: {e}")
+                return False
+
+def update_order_delivery_sum(order_id: int, delivery_sum: float) -> bool:
+    """Обновляет сумму доставки заказа"""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                query = """
+                    UPDATE orders 
+                    SET delivery_sum = %s 
+                    WHERE id = %s
+                """
+                cursor.execute(query, (delivery_sum, order_id))
+                conn.commit()
+                return True
+            except Exception as e:
+                print(f"Error updating delivery sum: {e}")
+                return False
+
+def update_order_delivery_note(order_id: int, note: str) -> bool:
+    """Обновляет заметку курьера к заказу"""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                query = """
+                    UPDATE orders 
+                    SET delivery_note = %s 
+                    WHERE id = %s
+                """
+                cursor.execute(query, (note, order_id))
+                conn.commit()
+                return True
+            except Exception as e:
+                print(f"Error updating delivery note: {e}")
+                return False
+
+def get_trip_total_delivery_sum(trip_id: int) -> float:
+    """
+    Получает общую сумму доставки для поездки
+
+    Args:
+        trip_id: ID поездки
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                query = """
+                    SELECT COALESCE(SUM(o.delivery_sum), 0) as total_delivery_sum
+                    FROM trip_items ti
+                    JOIN order_items oi ON ti.order_item_id = oi.id
+                    JOIN orders o ON oi.order_id = o.id
+                    WHERE ti.trip_id = %s
+                """
+                cursor.execute(query, (trip_id,))
+                result = cursor.fetchone()
+                return float(result[0]) if result else 0.0
+
+            except Exception as e:
+                print(f"Error getting trip delivery sum: {e}")
+                return 0.0
+
+
+def get_delivery_coordinates(order_id: int) -> Optional[Dict]:
+    """
+    Получает координаты адреса доставки из таблицы delivery_addresses
+
+    Args:
+        order_id: ID заказа
+    Returns:
+        Dict с координатами или None
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            query = """
+                SELECT coordinates
+                FROM delivery_addresses
+                WHERE order_id = %s
+            """
+            cursor.execute(query, (order_id,))
+            result = cursor.fetchone()
+            print(result,'result')
+            if result and result[0]:
+                coordinates = result[0]
+                if isinstance(coordinates, str):
+                    coordinates = json.loads(coordinates)
+                return coordinates
+            return None
+
+def increment_stock(product_param_id: int):
+    """Увеличивает количество товара на складе на 1"""
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    UPDATE product_params 
+                    SET stock = stock + 1
+                    WHERE id = %s
+                """, (product_param_id,))
+                conn.commit()
+                return True
+    except Exception as e:
+        print(f"Error in increment_stock: {e}")
+        return False
+
+def update_trip_item(status:str,order_item_id):
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                UPDATE trip_items 
+                SET status = %s, delivered_at = NOW()
+                WHERE order_item_id = %s
+            """, (status, order_item_id))
+
+
+def update_product_stock(param_id: int, quantity: int, is_addition: bool = True) -> bool:
+    """
+    Обновляет количество товара на складе.
+
+    Args:
+        param_id: ID параметра продукта
+        quantity: Количество для добавления/вычитания
+        is_addition: True для добавления, False для вычитания
+
+    Returns:
+        bool: True если операция успешна, False если произошла ошибка
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                if not is_addition:
+                    # Проверяем достаточно ли товара для списания
+                    cursor.execute(
+                        "SELECT stock FROM product_params WHERE id = %s",
+                        (param_id,)
+                    )
+                    current_stock = cursor.fetchone()[0]
+                    if current_stock < quantity:
+                        return False
+
+                # Обновляем сток
+                cursor.execute("""
+                    UPDATE product_params 
+                    SET stock = stock {} %s 
+                    WHERE id = %s
+                    RETURNING stock
+                """.format('+' if is_addition else '-'),
+                               (quantity, param_id)
+                               )
+
+                new_stock = cursor.fetchone()[0]
+                if new_stock < 0:
+                    conn.rollback()
+                    return False
+
+                conn.commit()
+                return True
+
+            except Exception as e:
+                print(f"Error updating stock: {e}")
+                conn.rollback()
+                return False
+
+
+def update_product_prices(product_id: int, sale_price: float, avito_delivery_price: float) -> bool:
+    """
+    Обновляет цены продукта.
+
+    Args:
+        product_id: ID продукта
+        sale_price: Цена продажи
+        avito_delivery_price: Цена доставки Авито
+
+    Returns:
+        bool: True если операция успешна, False если произошла ошибка
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                cursor.execute("""
+                    UPDATE products 
+                    SET sale_price = %s, avito_delivery_price = %s
+                    WHERE id = %s
+                """, (sale_price, avito_delivery_price, product_id))
+
+                conn.commit()
+                return True
+
+            except Exception as e:
+                print(f"Error updating prices: {e}")
+                conn.rollback()
+                return False
+
+def get_setting_value(key: str) -> float:
+    """Получает значение настройки по ключу"""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT value FROM base_settings WHERE key = %s", (key,))
+            result = cursor.fetchone()
+            return float(result[0]) if result else 0
+
+def update_setting_value(key: str, value: float) -> bool:
+    """Обновляет значение настройки"""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                cursor.execute(
+                    """
+                    UPDATE base_settings 
+                    SET value = %s, updated_at = now() 
+                    WHERE key = %s
+                    """,
+                    (value, key)
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                print(f"Error updating setting: {e}")
+                return False
+
+def get_all_settings():
+    """Получает все настройки"""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT key, value, description FROM base_settings")
+            return cursor.fetchall()
+
+
+def get_courier_trips(courier_username: str, start_date: str, end_date: str):
+    """
+    Получает информацию о поездках курьера за указанный период.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            query = """
+                WITH courier_trips_info AS (
+                    SELECT 
+                        ct.id as trip_id,
+                        ct.status as trip_status,
+                        ct.created_at,
+                        ct.courier_id
+                    FROM courier_trips ct
+                    JOIN users u ON ct.courier_id = u.id
+                    WHERE u.username = %s
+                    AND ct.created_at::date BETWEEN %s::date AND %s::date
+                ),
+                trip_items_info AS (
+                    SELECT 
+                        ti.trip_id,
+                        ti.status as trip_item_status,
+                        o.id as order_id,
+                        o.order_type,
+                        o.delivery_address,
+                        o.status as order_status,
+                        oi.id as order_item_id,
+                        oi.status as order_item_status,
+                        p.name as product_name,
+                        pp.title as param_title,
+                        oi.tracking_number
+                    FROM courier_trips_info cti
+                    JOIN trip_items ti ON cti.trip_id = ti.trip_id
+                    JOIN order_items oi ON ti.order_item_id = oi.id
+                    JOIN orders o ON oi.order_id = o.id
+                    JOIN products p ON oi.product_id = p.id
+                    JOIN product_params pp ON oi.product_param_id = pp.id
+                )
+                SELECT 
+                    cti.trip_id as id,
+                    cti.trip_status as status,
+                    cti.created_at,
+                    COALESCE(jsonb_agg(
+                        CASE WHEN tii.order_id IS NOT NULL THEN
+                            jsonb_build_object(
+                                'order_id', tii.order_id,
+                                'order_type', tii.order_type,
+                                'delivery_address', tii.delivery_address,
+                                'order_status', tii.order_status,
+                                'item_status', tii.order_item_status,
+                                'order_item_id', tii.order_item_id,
+                                'product', jsonb_build_object(
+                                    'name', tii.product_name,
+                                    'param_title', tii.param_title,
+                                    'tracking_number', tii.tracking_number
+                                )
+                            )
+                        ELSE NULL END
+                    ) FILTER (WHERE tii.order_id IS NOT NULL), '[]') as items
+                FROM courier_trips_info cti
+                LEFT JOIN trip_items_info tii ON cti.trip_id = tii.trip_id
+                GROUP BY cti.trip_id, cti.trip_status, cti.created_at
+                ORDER BY cti.created_at DESC
+            """
+
+            cursor.execute(query, (
+                f"@{courier_username.lower()}" if not courier_username.startswith('@') else courier_username,
+                start_date,
+                end_date
+            ))
+
+            trips = []
+            for row in cursor.fetchall():
+                trip = {
+                    'id': row[0],
+                    'status': row[1],
+                    'created_at': row[2],
+                    'items': row[3] if row[3] else []
+                }
+                trips.append(trip)
+
+            return trips
