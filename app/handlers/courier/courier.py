@@ -29,7 +29,7 @@ from database import get_delivery_zone_for_order
 from database import get_courier_trips
 from utils import validate_date_range
 
-from app.app_types import TripStatusRu, OrderTypeRu
+from app_types import TripStatusRu, OrderTypeRu
 
 
 def notify_couriers(order_message, state: StateContext,avito_photos=None, reply_message_id=None,):
