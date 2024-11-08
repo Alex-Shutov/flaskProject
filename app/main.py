@@ -22,9 +22,6 @@ app = Flask(__name__)
 bot = get_bot_instance()
 
 
-# Создаем экземпляр StateMiddleware
-state_middleware = StateMiddleware(bot)
-
 
 @app.route('/' + SECRET_TOKEN, methods=['POST'])
 def webhook():
@@ -35,20 +32,7 @@ def webhook():
 
             update = types.Update.de_json(json_string)
 
-            if update.message:
-                logger.info(f"Processing message from user {update.message.from_user.id}")
-                # Создаем контекст состояния
-                data = {'state': None}
-                state_middleware.pre_process(update.message, data)
-                bot.process_new_updates([update])
-                state_middleware.post_process(update.message, data, None)
-            elif update.callback_query:
-                logger.info(f"Processing callback query from user {update.callback_query.from_user.id}")
-                data = {'state': None}
-                state_middleware.pre_process(update.callback_query.message, data)
-                bot.process_new_updates([update])
-                state_middleware.post_process(update.callback_query.message, data, None)
-
+            bot.process_new_updates([update])
             return ''
         except Exception as e:
             logger.error(f"Error processing update: {e}")
@@ -83,11 +67,10 @@ def set_webhook():
         return f"Error: {str(e)}", 500
 
 
-def setup_bot():
-    """Настройка бота"""
-    # Добавляем фильтры и middleware
-    bot.add_custom_filter(custom_filters.StateFilter(bot))
-    bot.setup_middleware(state_middleware)
+@app.route('/remove_webhook', methods=['GET', 'POST'])
+def remove_webhook():
+    bot.remove_webhook()
+    return "Webhook removed", 200
 
 
 
@@ -95,7 +78,6 @@ def setup_bot():
 if __name__ == '__main__':
     # Инициализация
     logger.info('Starting bot initialization...')
-    setup_bot()
     start_scheduler()
 
 
@@ -108,8 +90,8 @@ if __name__ == '__main__':
         app.run(
             host=SERVER_HOST,
             port=SERVER_PORT,
-            ssl_context=(SSL_CERT, SSL_PRIV),
-            debug=False
+            # ssl_context=(SSL_CERT, SSL_PRIV),
+            debug=True
         )
     else:
         logger.info("No webhook set. Starting bot in polling mode...")

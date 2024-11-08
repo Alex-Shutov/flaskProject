@@ -1,4 +1,5 @@
-from telebot import TeleBot
+from telebot import TeleBot, custom_filters
+from telebot.states.sync.middleware import StateMiddleware
 from telebot.storage import StateRedisStorage
 
 from config import REDIS_HOST, REDIS_PORT, REDIS_DB
@@ -10,7 +11,14 @@ import states
 state_storage = StateRedisStorage(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
 
 # Инициализируем бота с хранилищем состояний
-bot = TeleBot(BOT_TOKEN, state_storage=state_storage,use_class_middlewares=True)
+bot = TeleBot(BOT_TOKEN, state_storage=state_storage, use_class_middlewares=True)
+
+# Создаем middleware для состояний
+state_middleware = StateMiddleware(bot)
+bot.add_custom_filter(custom_filters.StateFilter(bot))
+bot.setup_middleware(state_middleware)
+
+bot._user=bot.user
 
 def get_bot_instance():
     return bot
