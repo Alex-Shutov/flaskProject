@@ -1,9 +1,8 @@
 import logging
 import ssl
-from threading import Thread
 from flask import Flask, request, abort
 from telebot import types, custom_filters
-
+from telebot.storage import StateRedisStorage
 from shedule import start_scheduler
 from config import BOT_TOKEN, WEBHOOK_URL, DEBUG, PORT, SSL_CERT, SSL_PRIV, SERVER_HOST, SERVER_PORT, SECRET_TOKEN
 from bot import get_bot_instance
@@ -18,6 +17,10 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 bot = get_bot_instance()
 
+# Создаем экземпляр StateMiddleware для webhook режима
+state_storage = StateRedisStorage()
+state_middleware = StateMiddleware(bot, state_storage)
+
 
 @app.route('/' + SECRET_TOKEN, methods=['POST'])
 def webhook():
@@ -25,8 +28,10 @@ def webhook():
         try:
             json_string = request.get_data().decode('utf-8')
             logger.info(f"Received webhook data: {json_string[:200]}...")
+
             update = types.Update.de_json(json_string)
-            bot.process_new_updates([update])
+            # Обрабатываем update через middleware
+            state_middleware.process_update(update)
             return ''
         except Exception as e:
             logger.error(f"Error processing update: {e}")
@@ -37,13 +42,11 @@ def webhook():
         abort(403)
 
 
-
 @app.route('/health', methods=['GET'])
 def health_check():
     return 'OK'
 
 
-# Регистрация вебхука
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
     try:
@@ -71,7 +74,6 @@ def remove_webhook():
 
 @app.route('/webhook_info', methods=['GET'])
 def get_webhook_info():
-    """Эндпоинт для проверки статуса вебхука"""
     info = bot.get_webhook_info()
     return {
         'url': info.url,
@@ -82,33 +84,28 @@ def get_webhook_info():
     }
 
 
-def run_flask():
-    """Запуск Flask сервера"""
-    logger.info(f"Starting bot in webhook mode on {SERVER_HOST}:{SERVER_PORT}")
-    app.run(
-        host=SERVER_HOST,
-        port=SERVER_PORT,
-        ssl_context=(SSL_CERT, SSL_PRIV),
-        debug=False
-    )
+def setup_bot():
+    """Настройка бота"""
+    bot.add_custom_filter(custom_filters.StateFilter(bot))
+    bot.setup_middleware(state_middleware)
 
 
 if __name__ == '__main__':
-    # Проверяем, установлен ли вебхук
+    # Инициализация
     start_scheduler()
+    setup_bot()
+
+    # Проверяем, установлен ли вебхук
     webhook_info = bot.get_webhook_info()
-    bot.add_custom_filter(custom_filters.StateFilter(bot))
-    bot.setup_middleware(StateMiddleware(bot))
 
     if webhook_info.url:
         print(f"Бот работает через вебхук: {webhook_info.url}")
-        run_flask()
+        app.run(
+            host=SERVER_HOST,
+            port=SERVER_PORT,
+            ssl_context=(SSL_CERT, SSL_PRIV),
+            debug=False
+        )
     else:
         print("Вебхук не установлен. Запуск бота в режиме long polling.")
-        # Запускаем Flask в отдельном потоке, чтобы можно было установить вебхук
-        flask_thread = Thread(target=run_flask)
-        flask_thread.daemon = True  # Поток завершится вместе с основной программой
-        flask_thread.start()
-
-        # Запускаем long polling в основном потоке
         bot.polling(none_stop=True)
