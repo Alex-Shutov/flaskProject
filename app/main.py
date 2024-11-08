@@ -18,8 +18,7 @@ app = Flask(__name__)
 bot = get_bot_instance()
 
 # Создаем экземпляр StateMiddleware для webhook режима
-state_storage = StateRedisStorage()
-state_middleware = StateMiddleware(bot, state_storage)
+state_middleware = StateMiddleware(bot)
 
 
 @app.route('/' + SECRET_TOKEN, methods=['POST'])
