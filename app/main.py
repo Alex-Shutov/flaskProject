@@ -91,14 +91,23 @@ def setup_bot():
 
 if __name__ == '__main__':
     # Инициализация
+    logger.info('1')
     start_scheduler()
+    logger.info('2')
+
     setup_bot()
+    logger.info('3')
+
 
     # Проверяем, установлен ли вебхук
     webhook_info = bot.get_webhook_info()
+    logger.info('4')
+
 
     if webhook_info.url:
         print(f"Бот работает через вебхук: {webhook_info.url}")
+        logger.info('5')
+
         app.run(
             host=SERVER_HOST,
             port=SERVER_PORT,
