@@ -29,8 +29,27 @@ def webhook():
             logger.info(f"Received webhook data: {json_string[:200]}...")
 
             update = types.Update.de_json(json_string)
-            # Обрабатываем update через middleware
-            state_middleware.process_update(update)
+
+            # Если это сообщение
+            if update.message:
+                # Подготавливаем данные для middleware
+                data = {}
+                # Пропускаем сообщение через middleware
+                state_middleware.pre_process(update.message, data)
+                # Обрабатываем сообщение
+                bot.process_new_updates([update])
+                # Пост-обработка
+                state_middleware.post_process(update.message, data, None)
+            # Если это callback query
+            elif update.callback_query:
+                data = {}
+                state_middleware.pre_process(update.callback_query.message, data)
+                bot.process_new_updates([update])
+                state_middleware.post_process(update.callback_query.message, data, None)
+            else:
+                # Для других типов обновлений
+                bot.process_new_updates([update])
+
             return ''
         except Exception as e:
             logger.error(f"Error processing update: {e}")
@@ -91,23 +110,16 @@ def setup_bot():
 
 if __name__ == '__main__':
     # Инициализация
-    logger.info('1')
+    logger.info('Starting bot initialization...')
     start_scheduler()
-    logger.info('2')
-
     setup_bot()
-    logger.info('3')
-
 
     # Проверяем, установлен ли вебхук
     webhook_info = bot.get_webhook_info()
-    logger.info('4')
-
+    logger.info('Checking webhook info...')
 
     if webhook_info.url:
-        print(f"Бот работает через вебхук: {webhook_info.url}")
-        logger.info('5')
-
+        logger.info(f"Bot is running in webhook mode: {webhook_info.url}")
         app.run(
             host=SERVER_HOST,
             port=SERVER_PORT,
@@ -115,5 +127,5 @@ if __name__ == '__main__':
             debug=False
         )
     else:
-        print("Вебхук не установлен. Запуск бота в режиме long polling.")
+        logger.info("No webhook set. Starting bot in polling mode...")
         bot.polling(none_stop=True)
