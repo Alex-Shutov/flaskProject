@@ -1,8 +1,10 @@
-from flask import Flask, request
+import ssl
+
+from flask import Flask, request, abort
 from telebot import types,custom_filters
 
 from shedule import start_scheduler
-from config import BOT_TOKEN, WEBHOOK_URL, DEBUG, PORT
+from config import BOT_TOKEN, WEBHOOK_URL, DEBUG, PORT, SSL_CERT, SSL_PRIV, SERVER_HOST, SERVER_PORT
 from bot import get_bot_instance
 from telebot.states.sync.middleware import StateMiddleware
 import handlers.start
@@ -10,18 +12,30 @@ import handlers.start
 app = Flask(__name__)
 bot = get_bot_instance()
 
-@app.route('/' + BOT_TOKEN, methods=['POST'])
+@app.route('/webhook/' + SECRET_TOKEN, methods=['POST'])
 def webhook():
-    json_string = request.get_data().decode('utf-8')
-    update = types.Update.de_json(json_string)
-    bot.process_new_updates([update])
-    return '', 200
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return ''
+    else:
+        abort(403)
 
-@app.route('/set_webhook', methods=['GET', 'POST'])
+
+# Регистрация вебхука
+@app.route('/set_webhook', methods=['GET'])
 def set_webhook():
     bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL + '/' + BOT_TOKEN)
-    return "Webhook set", 200
+
+    # Устанавливаем новый вебхук
+    webhook_info = bot.set_webhook(
+        url=WEBHOOK_URL,
+        certificate=open(SSL_CERT, 'r'),
+    )
+
+    return f'Webhook установлен: {webhook_info}'
+
 
 @app.route('/remove_webhook', methods=['GET', 'POST'])
 def remove_webhook():
@@ -38,7 +52,14 @@ if __name__ == '__main__':
     bot.setup_middleware(StateMiddleware(bot))
     if webhook_info.url:
         print(f"Бот работает через вебхук: {webhook_info.url}")
-        app.run(debug=DEBUG, port=PORT)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+        context.load_cert_chain(SSL_CERT, SSL_PRIV)
+        app.run(
+            host=SERVER_HOST,
+            port=SERVER_PORT,
+            ssl_context=context,
+            debug=False
+        )
     else:
         print("Вебхук не установлен. Запуск бота в режиме long polling.")
         # bot.remove_webhook()

@@ -22,6 +22,12 @@ REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
 
+SECRET_TOKEN=os.getenv('SECRET_TOKEN')
+SSL_CERT = os.getenv('SSL_CERT', '/path/to/cert.pem')
+SSL_PRIV = os.getenv('SSL_PRIV', '/path/to/privkey.pem')
+SERVER_HOST = os.getenv('SERVER_HOST', '0.0.0.0')
+SERVER_PORT = int(os.getenv('SERVER_PORT', 8443))
+
 DATABASE_CONFIG = {
     'database': DB_NAME,
     'user': DB_USER,
