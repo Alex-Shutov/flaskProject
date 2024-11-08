@@ -11,11 +11,11 @@ WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 CHANNEL_CHAT_ID = os.getenv('CHANNEL_ID')
 
 # Database settings
-DB_NAME = os.getenv('DB_NAME', 'postgres')
-DB_USER = os.getenv('DB_USER', 'postgres')
-DB_PASSWORD = os.getenv('DB_PASSWORD', '12345')
-DB_HOST = os.getenv('DB_HOST', 'localhost')
-DB_PORT = os.getenv('DB_PORT', '5432')
+DB_NAME = os.getenv('DB_NAME')
+DB_USER = os.getenv('DB_USER')
+DB_PASSWORD = os.getenv('DB_PASSWORD')
+DB_HOST = os.getenv('DB_HOST')
+DB_PORT = os.getenv('DB_PORT')
 
 # Redis
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
@@ -40,12 +40,12 @@ DATABASE_CONFIG = {
 
 
 # Flask settings
-DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
-PORT = int(os.getenv('PORT', 5000))
+DEBUG = os.getenv('DEBUG', 'False').lower() == 'True'
+PORT = int(os.getenv('PORT'))
 
 WAREHOUSE_LOCATION = {
-    'latitude': float(os.getenv('WAREHOUSE_LAT', '56.8519')),  # Пример координат
-    'longitude': float(os.getenv('WAREHOUSE_LON', '60.6122'))
+    'latitude': float(os.getenv('WAREHOUSE_LAT')),  # Пример координат
+    'longitude': float(os.getenv('WAREHOUSE_LON'))
 }
 
 

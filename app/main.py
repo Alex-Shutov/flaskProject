@@ -1,3 +1,4 @@
+import logging
 import ssl
 
 from flask import Flask, request, abort
@@ -9,32 +10,49 @@ from bot import get_bot_instance
 from telebot.states.sync.middleware import StateMiddleware
 import handlers.start
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 app = Flask(__name__)
 bot = get_bot_instance()
 
-@app.route('/webhook/' + SECRET_TOKEN, methods=['POST'])
+@app.route('/' + SECRET_TOKEN, methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return ''
+        try:
+            json_string = request.get_data().decode('utf-8')
+            update = types.Update.de_json(json_string)
+            bot.process_new_updates([update])
+            return ''
+        except Exception as e:
+            logger.error(f"Error processing update: {e}")
+            return '', 500
     else:
+        logger.warning("Received non-JSON request")
         abort(403)
 
+@app.route('/health', methods=['GET'])
+def health_check():
+    return 'OK'
 
 # Регистрация вебхука
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
     bot.remove_webhook()
 
-    # Устанавливаем новый вебхук
     webhook_info = bot.set_webhook(
-        url=WEBHOOK_URL,
-        certificate=open(SSL_CERT, 'r'),
+        url=WEBHOOK_URL + SECRET_TOKEN,
+        certificate=open(SSL_CERT, 'rb')  # Используем самоподписанный сертификат
     )
+    if webhook_info:
+        logger.info(f"Webhook was set: {WEBHOOK_URL}")
+        return True
+    else:
+        logger.error("Failed to set webhook")
+        return False
 
-    return f'Webhook установлен: {webhook_info}'
 
 
 @app.route('/remove_webhook', methods=['GET', 'POST'])
@@ -52,12 +70,12 @@ if __name__ == '__main__':
     bot.setup_middleware(StateMiddleware(bot))
     if webhook_info.url:
         print(f"Бот работает через вебхук: {webhook_info.url}")
-        context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
-        context.load_cert_chain(SSL_CERT, SSL_PRIV)
+        # context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+        # context.load_cert_chain(SSL_CERT, SSL_PRIV)
         app.run(
             host=SERVER_HOST,
             port=SERVER_PORT,
-            ssl_context=context,
+            ssl_context=(SSL_CERT, SSL_PRIV),
             debug=False
         )
     else:
