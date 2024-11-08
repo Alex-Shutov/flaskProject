@@ -8,7 +8,7 @@ from redis_client import save_user_state, load_user_state, delete_user_state,red
 import states
 
 state_storage = StateRedisStorage(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
-bot = TeleBot(BOT_TOKEN, state_storage=state_storage)
+bot = TeleBot(BOT_TOKEN, state_storage=state_storage,use_class_middlewares=True)
 # # Определение состояний для процесса продажи
 # class SaleStates(StatesGroup):
 #     product_id = State()       # выбор продукта
