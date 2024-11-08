@@ -24,15 +24,18 @@ def webhook():
     if request.headers.get('content-type') == 'application/json':
         try:
             json_string = request.get_data().decode('utf-8')
+            logger.info(f"Received webhook data: {json_string[:200]}...")
             update = types.Update.de_json(json_string)
             bot.process_new_updates([update])
             return ''
         except Exception as e:
             logger.error(f"Error processing update: {e}")
+            logger.exception(e)
             return '', 500
     else:
-        logger.warning("Received non-JSON request")
+        logger.warning(f"Received non-JSON request with content-type: {request.headers.get('content-type')}")
         abort(403)
+
 
 
 @app.route('/health', methods=['GET'])
@@ -81,6 +84,7 @@ def get_webhook_info():
 
 def run_flask():
     """Запуск Flask сервера"""
+    logger.info(f"Starting bot in webhook mode on {SERVER_HOST}:{SERVER_PORT}")
     app.run(
         host=SERVER_HOST,
         port=SERVER_PORT,

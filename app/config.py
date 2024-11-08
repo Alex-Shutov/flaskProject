@@ -5,7 +5,6 @@ load_dotenv()
 
 # Telegram Bot settings
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 
 # Telegram Chat Settings
 CHANNEL_CHAT_ID = os.getenv('CHANNEL_ID')
@@ -35,6 +34,11 @@ DATABASE_CONFIG = {
     'host': DB_HOST,
     'port': DB_PORT
 }
+
+# Webhook settings
+WEBHOOK_HOST = os.getenv('WEBHOOK_HOST')
+WEBHOOK_PORT = os.getenv('WEBHOOK_PORT',8443)
+WEBHOOK_URL = f"{WEBHOOK_HOST}:{WEBHOOK_PORT}/"
 
 
 
