@@ -90,8 +90,8 @@ if __name__ == '__main__':
         app.run(
             host=SERVER_HOST,
             port=SERVER_PORT,
-            # ssl_context=(SSL_CERT, SSL_PRIV),
-            debug=True
+            ssl_context=(SSL_CERT, SSL_PRIV),
+            debug=False
         )
     else:
         logger.info("No webhook set. Starting bot in polling mode...")
