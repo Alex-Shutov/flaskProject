@@ -1,13 +1,14 @@
 import logging
 import ssl
+from threading import Thread
 from flask import Flask, request, abort
 from telebot import types, custom_filters
+
 from shedule import start_scheduler
 from config import BOT_TOKEN, WEBHOOK_URL, DEBUG, PORT, SSL_CERT, SSL_PRIV, SERVER_HOST, SERVER_PORT, SECRET_TOKEN
 from bot import get_bot_instance
 from telebot.states.sync.middleware import StateMiddleware
 import handlers.start
-from threading import Thread
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,6 +40,7 @@ def health_check():
     return 'OK'
 
 
+# Регистрация вебхука
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
     try:
@@ -49,9 +51,7 @@ def set_webhook():
         )
         if webhook_info:
             logger.info(f"Webhook was set: {WEBHOOK_URL}")
-            # Перезапускаем приложение в режиме webhook
-            restart_in_webhook_mode()
-            return "Webhook set successfully!", 200
+            return "Webhook successfully set! Please restart the bot.", 200
         else:
             logger.error("Failed to set webhook")
             return "Failed to set webhook", 500
@@ -60,8 +60,15 @@ def set_webhook():
         return f"Error: {str(e)}", 500
 
 
+@app.route('/remove_webhook', methods=['GET', 'POST'])
+def remove_webhook():
+    bot.remove_webhook()
+    return "Webhook removed. Please restart the bot.", 200
+
+
 @app.route('/webhook_info', methods=['GET'])
 def get_webhook_info():
+    """Эндпоинт для проверки статуса вебхука"""
     info = bot.get_webhook_info()
     return {
         'url': info.url,
@@ -82,38 +89,22 @@ def run_flask():
     )
 
 
-def run_polling():
-    """Запуск бота в режиме long polling"""
-    logger.info("Starting bot in polling mode...")
-    bot.infinity_polling()
-
-
-def restart_in_webhook_mode():
-    """Перезапуск в режиме webhook"""
-    bot.remove_webhook()
-    bot.set_webhook(
-        url=WEBHOOK_URL + SECRET_TOKEN,
-        certificate=open(SSL_CERT, 'rb')
-    )
-
-
 if __name__ == '__main__':
-    # Инициализация
+    # Проверяем, установлен ли вебхук
     start_scheduler()
+    webhook_info = bot.get_webhook_info()
     bot.add_custom_filter(custom_filters.StateFilter(bot))
     bot.setup_middleware(StateMiddleware(bot))
 
-    # Проверяем наличие вебхука
-    webhook_info = bot.get_webhook_info()
-
     if webhook_info.url:
-        logger.info(f"Starting in webhook mode. Webhook URL: {webhook_info.url}")
+        print(f"Бот работает через вебхук: {webhook_info.url}")
         run_flask()
     else:
-        logger.info("No webhook set. Starting in polling mode with Flask server...")
-        # Запускаем Flask сервер в отдельном потоке
+        print("Вебхук не установлен. Запуск бота в режиме long polling.")
+        # Запускаем Flask в отдельном потоке, чтобы можно было установить вебхук
         flask_thread = Thread(target=run_flask)
+        flask_thread.daemon = True  # Поток завершится вместе с основной программой
         flask_thread.start()
 
         # Запускаем long polling в основном потоке
-        run_polling()
+        bot.polling(none_stop=True)
