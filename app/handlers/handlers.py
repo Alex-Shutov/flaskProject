@@ -2,7 +2,7 @@ from telebot import types
 from telebot.states.sync.context import StateContext
 from database import get_user_info
 
-from main import bot
+from bot import bot
 
 from database import get_product_info_with_params, get_product_params
 
