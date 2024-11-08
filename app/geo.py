@@ -3,6 +3,36 @@ import psycopg2
 from config import DATABASE_CONFIG, DELIVERY_ZONES
 
 
+def ensure_delivery_zones_table(connection):
+    """Создает таблицу delivery_zones, если она не существует"""
+    with connection.cursor() as cursor:
+        # Проверяем существование PostGIS расширения
+        cursor.execute("""
+            CREATE EXTENSION IF NOT EXISTS postgis;
+        """)
+
+        # Создаем таблицу если она не существует
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS delivery_zones (
+                id serial PRIMARY KEY,
+                name varchar(100) NOT NULL,
+                color varchar(50) NOT NULL,
+                base_price decimal NOT NULL,
+                additional_item_price decimal NOT NULL,
+                polygon geometry(Polygon, 4326),
+                created_at timestamp DEFAULT now()
+            );
+        """)
+
+        # Создаем индекс для геометрии
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS delivery_zones_polygon_idx 
+            ON delivery_zones USING GIST (polygon);
+        """)
+
+        connection.commit()
+
+
 def get_zone_info_by_color(color_hex: str) -> dict:
     """Получает информацию о зоне по её hex-цвету"""
     color_mapping = {
@@ -16,12 +46,10 @@ def get_zone_info_by_color(color_hex: str) -> dict:
 
 def add_white_zone(cursor):
     """Добавляет или обновляет белую зону"""
-    # Проверяем существование белой зоны
     cursor.execute("SELECT id FROM delivery_zones WHERE color = 'white'")
     white_zone_exists = cursor.fetchone()
 
     if white_zone_exists:
-        # Обновляем существующую белую зону
         cursor.execute("""
             UPDATE delivery_zones 
             SET name = 'Белая',
@@ -35,7 +63,6 @@ def add_white_zone(cursor):
             white_zone_exists[0]
         ))
     else:
-        # Создаем новую белую зону
         cursor.execute("""
             INSERT INTO delivery_zones 
                 (name, color, base_price, additional_item_price, polygon)
@@ -55,6 +82,9 @@ def import_delivery_zones(geojson_path: str):
 
     connection = psycopg2.connect(**DATABASE_CONFIG)
     try:
+        # Создаем таблицу если она не существует
+        ensure_delivery_zones_table(connection)
+
         with connection.cursor() as cursor:
             # Проверяем, есть ли данные в связанных таблицах
             cursor.execute("""
@@ -70,12 +100,9 @@ def import_delivery_zones(geojson_path: str):
                 print("Найдены связанные данные в таблицах courier_trips и/или delivery_addresses.")
                 print("Обновляем существующие зоны вместо полной очистки...")
 
-                # Получаем существующие зоны
                 cursor.execute("SELECT id, name FROM delivery_zones")
                 existing_zones = {name: zone_id for zone_id, name in cursor.fetchall()}
-
             else:
-                # Если нет связанных данных, можно использовать TRUNCATE CASCADE
                 cursor.execute("TRUNCATE TABLE delivery_zones CASCADE")
                 existing_zones = {}
 
@@ -88,13 +115,11 @@ def import_delivery_zones(geojson_path: str):
                     print(f"Пропускаем зону с неизвестным цветом: {fill_color}")
                     continue
 
-                # Получаем координаты полигона
                 coordinates = feature['geometry']['coordinates'][0]
                 polygon_points = [f"{lon} {lat}" for lon, lat in coordinates]
                 polygon_wkt = f"POLYGON(({', '.join(polygon_points)}))"
 
                 if zone_info['name'] in existing_zones:
-                    # Обновляем существующую зону
                     cursor.execute("""
                         UPDATE delivery_zones 
                         SET color = %s,
@@ -110,7 +135,6 @@ def import_delivery_zones(geojson_path: str):
                         existing_zones[zone_info['name']]
                     ))
                 else:
-                    # Создаем новую зону
                     cursor.execute("""
                         INSERT INTO delivery_zones 
                             (name, color, base_price, additional_item_price, polygon)
