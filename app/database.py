@@ -61,7 +61,7 @@ def get_products(type_id=None):
             if type_id:
                 # Если type_id передан, фильтруем по нему
                 query = "SELECT id, name FROM products WHERE type_id = %s and is_available = True"
-                cursor.execute(query, (type_id))
+                cursor.execute(query, (type_id,))
             else:
                 # Если type_id не передан, выводим все продукты
                 query = "SELECT id, name FROM products WHERE is_available = True"
