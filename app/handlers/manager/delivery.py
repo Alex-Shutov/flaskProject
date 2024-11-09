@@ -406,7 +406,12 @@ def finalize_delivery_order(chat_id,message_id,username, state: StateContext):
             process_product_stock(product_dict)
 
             # Уведомляем курьеров
-            notify_couriers(order_message, None, channel_message.message_id, state=state)
+            notify_couriers(
+                order_message,
+                state,
+                avito_photos=[],
+                reply_message_id=channel_message.message_id
+            )
 
             # Очищаем состояние
             state.delete()

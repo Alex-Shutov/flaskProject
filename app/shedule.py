@@ -1,9 +1,12 @@
+import logging
 from datetime import datetime
 
 import pytz
 import schedule
 import time
 import threading
+
+from flask_apscheduler import APScheduler
 
 from app_types import OrderTypeRu
 from bot import bot
@@ -187,19 +190,74 @@ def generate_daily_report():
         print(f"Error generating daily report: {e}")
 
 
-def run_scheduler():
-    """Функция для запуска планировщика"""
-    # ekb_tz = pytz.timezone('Asia/Yekaterinburg')
-    # schedule.every().day.at("00:00").do(generate_daily_report)
-    # schedule.every(1).minutes.do(generate_daily_report)
-    schedule.every().day.at("00:00").do(generate_daily_report)
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
+logger = logging.getLogger(__name__)
+
+# Создаем экземпляр планировщика
+scheduler = APScheduler()
 
 
-def start_scheduler():
-    """Запуск планировщика в отдельном потоке"""
-    scheduler_thread = threading.Thread(target=run_scheduler)
-    scheduler_thread.daemon = True
-    scheduler_thread.start()
+def init_scheduler(app):
+    """Инициализация планировщика"""
+    try:
+        # Конфигурация планировщика
+        app.config['SCHEDULER_API_ENABLED'] = True
+        app.config['SCHEDULER_TIMEZONE'] = "Asia/Yekaterinburg"
+
+        # Инициализация
+        scheduler.init_app(app)
+
+        # Добавляем задачу
+        scheduler.add_job(
+            id='daily_report',
+            func=generate_daily_report,  # Ваша оригинальная функция
+            trigger='cron',
+            hour=0,
+            minute=0
+        )
+
+        # Запускаем планировщик
+        scheduler.start()
+        logger.info("Scheduler initialized successfully")
+
+    except Exception as e:
+        logger.error(f"Error initializing scheduler: {e}")
+        raise
+
+
+def test_scheduler():
+    """Функция для тестирования планировщика"""
+    try:
+        generate_daily_report()
+        return True
+    except Exception as e:
+        logger.error(f"Test scheduler error: {e}")
+        return False
+
+
+# Эндпоинт для ручного запуска отчета (опционально)
+def create_scheduler_endpoints(app):
+    @app.route('/trigger-report', methods=['POST'])
+    def trigger_report():
+        try:
+            generate_daily_report()
+            return 'Report generated successfully', 200
+        except Exception as e:
+            logger.error(f"Error triggering report: {e}")
+            return str(e), 500
+
+    @app.route('/scheduler-status', methods=['GET'])
+    def scheduler_status():
+        try:
+            jobs = scheduler.get_jobs()
+            return {
+                'status': 'running',
+                'jobs': [
+                    {
+                        'id': job.id,
+                        'next_run': job.next_run_time.strftime("%Y-%m-%d %H:%M:%S")
+                    } for job in jobs
+                ]
+            }
+        except Exception as e:
+            logger.error(f"Error getting scheduler status: {e}")
+            return {'status': 'error', 'message': str(e)}, 500

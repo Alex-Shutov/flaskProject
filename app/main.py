@@ -3,7 +3,7 @@ import ssl
 from flask import Flask, request, abort
 from telebot import types, custom_filters
 from telebot.storage import StateRedisStorage
-from shedule import start_scheduler
+from shedule import  init_scheduler, create_scheduler_endpoints
 from config import BOT_TOKEN, WEBHOOK_URL, DEBUG, PORT, SSL_CERT, SSL_PRIV, SERVER_HOST, SERVER_PORT, SECRET_TOKEN
 from bot import get_bot_instance
 from telebot.states.sync.middleware import StateMiddleware
@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 bot = get_bot_instance()
+
+init_scheduler(app)
+
+create_scheduler_endpoints(app)
 
 
 
@@ -78,7 +82,7 @@ def remove_webhook():
 if __name__ == '__main__':
     # Инициализация
     logger.info('Starting bot initialization...')
-    start_scheduler()
+
 
 
     # Проверяем, установлен ли вебхук

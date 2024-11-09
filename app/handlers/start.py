@@ -298,6 +298,9 @@ def show_packing_orders(call: types.CallbackQuery, state: StateContext):
         return
     for order in orders:
         try:
+            if order['order_type'] == 'delivery':
+                print('delivery')
+            print(order,1)
             order_message = format_order_message(
                 order_id=order['id'],
                 product_list=order['products'].get('no_track', []).get('products') if order[
@@ -318,7 +321,7 @@ def show_packing_orders(call: types.CallbackQuery, state: StateContext):
                 hide_track_prices=True
 
             )
-            print(order)
+            print(order,2)
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(
                 "📦 Упаковать товар",
@@ -327,12 +330,18 @@ def show_packing_orders(call: types.CallbackQuery, state: StateContext):
 
             if order['order_type'] == 'avito':
                 # Получаем фотографии для Авито заказа
+                print('photos',1)
                 photos = get_avito_photos(order['id'])
+                print('photos',photos,2)
+
                 if photos:
                     media = create_media_group(photos, order_message)
                     bot.send_media_group(call.message.chat.id, media)
+                    print('photos', 3)
 
                     bot.send_message(call.message.chat.id, "Если вы хотите упаковать этот заказ, нажмите на кнопку ниже:", reply_markup=markup)
+                else:
+                    bot.send_message(call.message.chat.id, order_message, reply_markup=markup)
             else:
                 bot.send_message(call.message.chat.id, order_message, reply_markup=markup)
 
