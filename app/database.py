@@ -50,7 +50,7 @@ def get_user_info(username):
 def get_product_type():
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT id,title from type_product")
+            cursor.execute("SELECT id,title from type_product WHERE is_available = True")
             return cursor.fetchall()
 
 
@@ -60,11 +60,11 @@ def get_products(type_id=None):
         with conn.cursor() as cursor:
             if type_id:
                 # Если type_id передан, фильтруем по нему
-                query = "SELECT id, name FROM products WHERE type_id = %s"
+                query = "SELECT id, name FROM products WHERE type_id = %s and is_available = True"
                 cursor.execute(query, (type_id))
             else:
                 # Если type_id не передан, выводим все продукты
-                query = "SELECT id, name FROM products"
+                query = "SELECT id, name FROM products WHERE is_available = True"
                 cursor.execute(query)
 
             return cursor.fetchall()
@@ -73,7 +73,7 @@ def get_products(type_id=None):
 def get_product_params(product_id):
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT id, title,stock FROM product_params WHERE product_id = %s", (product_id,))
+            cursor.execute("SELECT id, title,stock FROM product_params WHERE product_id = %s and is_available = True", (product_id,))
             return cursor.fetchall()
 
 
@@ -255,7 +255,7 @@ def update_order_message_id(order_id, message_id):
 def get_product_info(product_id, param_id):
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT name,is_main_product FROM products WHERE id = %s", (product_id,))
+            cursor.execute("SELECT name,is_main_product FROM products WHERE id = %s and is_available = True", (product_id,))
             product_name,is_main_product = cursor.fetchone()
             cursor.execute("SELECT title FROM product_params WHERE id = %s", (param_id,))
             product_param = cursor.fetchone()[0]
@@ -895,7 +895,7 @@ def get_type_product_params(type_product_id):
 def get_all_type_products():
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            query = "SELECT id, title, product_parameters, created_at FROM type_product"
+            query = "SELECT id, title, product_parameters, created_at FROM type_product WHERE is_available = True"
             cursor.execute(query)
             result = cursor.fetchall()
 
@@ -991,7 +991,7 @@ def get_product_info_with_params(product_id, param_id=None):
     with get_connection() as conn:
         with conn.cursor() as cursor:
             # Получаем основную информацию о продукте
-            query = "SELECT id, name, param_parameters, type_id, product_values,is_main_product FROM products WHERE id = %s"
+            query = "SELECT id, name, param_parameters, type_id, product_values,is_main_product FROM products WHERE id = %s and is_available = True"
             cursor.execute(query, (product_id,))
             result = cursor.fetchone()
 
@@ -1007,7 +1007,7 @@ def get_product_info_with_params(product_id, param_id=None):
 
                 # Если передан param_id, получаем title из product_params
                 if param_id:
-                    cursor.execute("SELECT title FROM product_params WHERE id = %s", (param_id,))
+                    cursor.execute("SELECT title FROM product_params WHERE id = %s and is_available = True", (param_id,))
                     param_result = cursor.fetchone()
                     if param_result:
                         product_info['param_title'] = param_result[0]
@@ -1022,7 +1022,7 @@ def get_product_info_with_params(product_id, param_id=None):
 def get_type_product_by_id(type_product_id):
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            query = "SELECT id, title, product_parameters, created_at FROM type_product WHERE id = %s"
+            query = "SELECT id, title, product_parameters, created_at FROM type_product WHERE id = %s and is_available = True"
             cursor.execute(query, (type_product_id,))
             row = cursor.fetchone()
 
@@ -1686,7 +1686,7 @@ def update_product_stock(param_id: int, quantity: int, is_addition: bool = True)
                 if not is_addition:
                     # Проверяем достаточно ли товара для списания
                     cursor.execute(
-                        "SELECT stock FROM product_params WHERE id = %s",
+                        "SELECT stock FROM product_params WHERE id = %s and is_available = True",
                         (param_id,)
                     )
                     current_stock = cursor.fetchone()[0]
@@ -1863,3 +1863,40 @@ def get_courier_trips(courier_username: str, start_date: str, end_date: str):
                 trips.append(trip)
 
             return trips
+
+def soft_delete_type_product(type_id: int) -> bool:
+    """
+    Мягкое удаление типа продукта и всех связанных с ним продуктов.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT soft_delete_type_product(%s)",
+                (type_id,)
+            )
+            return cursor.fetchone()[0] == False
+
+def soft_delete_product(product_id: int) -> bool:
+    """
+    Мягкое удаление продукта и всех его параметров.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT soft_delete_product(%s)",
+                (product_id,)
+            )
+            result = cursor.fetchone()[0]
+            return result == False
+
+def soft_delete_product_param(param_id: int) -> bool:
+    """
+    Мягкое удаление параметра продукта.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT soft_delete_product_param(%s)",
+                (param_id,)
+            )
+            return cursor.fetchone()[0] == False

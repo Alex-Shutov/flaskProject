@@ -24,6 +24,8 @@ from database import update_product_prices, get_product_params, update_product_s
 
 from handlers.admin.genereal_report import generate_detailed_sales_report
 
+from database import soft_delete_product_param, soft_delete_product, soft_delete_type_product
+
 
 #
 #
@@ -278,7 +280,7 @@ def handle_view_command(call: types.CallbackQuery, state: StateContext):
     elif command == "product":
         # Получаем список продуктов для выбранного типа
         with state.data() as data:
-            type_product_id = data.get('selected_type_product_id')
+            type_product_id = data.get('selected_type_product_info')['id']
         products = get_all_products(type_product_id)
 
         if not products:
@@ -1067,3 +1069,180 @@ def handle_prices_update(message: types.Message, state: StateContext):
             message,
             "Неверный формат. Введите два числа через запятую (например: 1000, 1500)"
         )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.endswith('-delete'))
+def handle_delete_action(call: types.CallbackQuery, state: StateContext):
+    command = call.data.split('-')[0]
+
+    if command == 'type_product':
+        # Показываем список доступных типов продуктов для удаления
+        type_products = get_all_type_products()
+        if not type_products:
+            bot.answer_callback_query(call.id, "Нет доступных типов продуктов.")
+            return
+
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for type_product in type_products:
+            markup.add(types.InlineKeyboardButton(
+                type_product['name'],
+                callback_data=f"delete_type_{type_product['id']}"
+            ))
+
+        bot.edit_message_text(
+            "Выберите тип продукта для удаления:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+
+    elif command == 'product':
+        # Проверяем, выбран ли тип продукта
+        with state.data() as data:
+            selected_type_info = data.get('selected_type_product_info')
+
+        if not selected_type_info:
+            bot.answer_callback_query(call.id, "Сначала выберите тип продукта.")
+            return
+
+        products = get_all_products(selected_type_info['id'])
+        if not products:
+            bot.answer_callback_query(call.id, "Нет доступных продуктов.")
+            return
+
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for product in products:
+            markup.add(types.InlineKeyboardButton(
+                product['name'],
+                callback_data=f"delete_product_{product['id']}"
+            ))
+
+        bot.edit_message_text(
+            "Выберите продукт для удаления:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+
+    elif command == 'product_param':
+        with state.data() as data:
+            product_id = data.get('selected_product_id')
+
+        if not product_id:
+            bot.answer_callback_query(call.id, "Сначала выберите продукт.")
+            return
+
+        params = get_all_product_params(product_id)
+        if not params:
+            bot.answer_callback_query(call.id, "Нет доступных параметров.")
+            return
+
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for param in params:
+            markup.add(types.InlineKeyboardButton(
+                param['name'],
+                callback_data=f"delete_param_{param['id']}"
+            ))
+
+        bot.edit_message_text(
+            "Выберите параметр для удаления:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('delete_type_'))
+def handle_type_deletion(call: types.CallbackQuery, state: StateContext):
+    type_id = int(call.data.split('_')[2])
+
+    # Запрашиваем подтверждение
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_delete_type_{type_id}"),
+        types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_delete")
+    )
+
+    bot.edit_message_text(
+        "⚠️ Вы уверены, что хотите удалить этот тип продукта?\n"
+        "Это действие также скроет все связанные продукты.",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('delete_product_'))
+def handle_product_deletion(call: types.CallbackQuery, state: StateContext):
+    product_id = int(call.data.split('_')[2])
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_delete_product_{product_id}"),
+        types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_delete")
+    )
+
+    bot.edit_message_text(
+        "⚠️ Вы уверены, что хотите удалить этот продукт?\n"
+        "Это действие также скроет все его параметры.",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('delete_param_'))
+def handle_param_deletion(call: types.CallbackQuery, state: StateContext):
+    param_id = int(call.data.split('_')[2])
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_delete_param_{param_id}"),
+        types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_delete")
+    )
+
+    bot.edit_message_text(
+        "⚠️ Вы уверены, что хотите удалить этот параметр продукта?",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_delete_'))
+def handle_delete_confirmation(call: types.CallbackQuery, state: StateContext):
+    _, _, entity, entity_id = call.data.split('_')
+    entity_id = int(entity_id)
+    success = False
+
+    if entity == 'type':
+        success = soft_delete_type_product(entity_id)
+        message = "тип продукта"
+    elif entity == 'product':
+        success = soft_delete_product(entity_id)
+        message = "продукт"
+    elif entity == 'param':
+        success = soft_delete_product_param(entity_id)
+        message = "параметр продукта"
+
+    # if success:
+    bot.edit_message_text(
+        f"✅ {message.capitalize()} успешно удален.",
+        call.message.chat.id,
+        call.message.message_id
+    )
+    # else:
+    #     bot.edit_message_text(
+    #         f"❌ Ошибка при удалении: {message} не найден.",
+    #         call.message.chat.id,
+    #         call.message.message_id
+    #     )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'cancel_delete')
+def handle_delete_cancellation(call: types.CallbackQuery, state: StateContext):
+    bot.edit_message_text(
+        "❌ Удаление отменено.",
+        call.message.chat.id,
+        call.message.message_id
+    )
