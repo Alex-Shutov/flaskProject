@@ -255,7 +255,7 @@ def validate_date_range(date_range):
             return None
     return None
 
-def set_admin_commands(bot):
+def set_admin_commands(bot,message):
     admin_commands = [
         types.BotCommand("/type_product", "Управление типами продуктов"),
         types.BotCommand("/product", "Управление продуктами"),
@@ -265,7 +265,7 @@ def set_admin_commands(bot):
         types.BotCommand("/settings", "Настройки"),
         types.BotCommand("/restart", "Перезапустить бота")
     ]
-    bot.set_my_commands(admin_commands)
+    bot.set_my_commands(admin_commands,scope=types.BotCommandScopeChat(message.chat.id))
 
 def is_valid_command(message_text,state):
     if message_text.startswith('#') or message_text.startswith('/restart'):

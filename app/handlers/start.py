@@ -65,6 +65,8 @@ def start(message,state:StateContext):
 
     if not user_access:
         bot.reply_to(message, "У вас нет доступа к боту. Обратитесь к администратору для получения доступа.")
+        a = bot.delete_my_commands(scope=types.BotCommandScopeChat(message.chat.id))
+
         return
 
 
@@ -85,10 +87,10 @@ def start(message,state:StateContext):
                      "У вас нет доступа к функциям бота. Обратитесь к администратору для получения необходимых прав.")
         return
     if 'Admin' in user_access['roles']:
-        set_admin_commands(bot)
+        set_admin_commands(bot,message)
     else:
         general_command = [types.BotCommand("/restart", "Перезапустить бота")]
-        bot.set_my_commands(general_command)
+        bot.set_my_commands(general_command,scope=types.BotCommandScopeChat(message.chat.id))
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(*available_buttons)
     bot.send_message(message.chat.id, f"Добро пожаловать, {user_access['name']}! Выберите действие:", reply_markup=markup)
