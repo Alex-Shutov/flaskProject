@@ -34,7 +34,7 @@ def check_user_access(username):
 def get_user_info(username):
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT id, name, username,telegram_id,role FROM users WHERE username = %s", (f"@{username.lower() if username else ''}",))
+            cursor.execute("SELECT id, name, username,telegram_id,role FROM users WHERE username = %s", (f"@{username.lower()}",))
             user_info = cursor.fetchone()
 
             if not user_info:
