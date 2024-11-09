@@ -12,8 +12,10 @@ from app_types import OrderType, SaleType
 
 from app_types import SaleTypeRu
 
+from database import get_user_info_by_id
 
-def get_user_by_username(username, state):
+
+def get_user_by_username(username, state, user_id=None):
     """
     Получает информацию о пользователе из state. Если информации нет, запрашивает её из БД и сохраняет в state.
 
@@ -27,7 +29,7 @@ def get_user_by_username(username, state):
 
     if not user_info:
         # Если нет в state, получаем из базы данных
-        user_info = get_user_info(username)  # Это функция запроса к базе данных
+        user_info = get_user_info(username) # Это функция запроса к базе данных
 
         if user_info:
             # Сохраняем данные в state
@@ -36,6 +38,8 @@ def get_user_by_username(username, state):
             return None  # Если пользователь не найден в БД
 
     return user_info
+
+
 
 
 def review_order_data(chat_id, state: StateContext):

@@ -34,7 +34,7 @@ def check_user_access(username):
 def get_user_info(username):
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT id, name, username,telegram_id,role FROM users WHERE username = %s", (f"@{username.lower()}",))
+            cursor.execute("SELECT id, name, username,telegram_id,role FROM users WHERE username = %s", (f"@{username.lower() if username else ''}",))
             user_info = cursor.fetchone()
 
             if not user_info:
@@ -1177,6 +1177,28 @@ def decrement_stock(order_id=None, product_id=None, product_param_id=None, quant
                 conn.rollback()
                 print(f"Произошла ошибка при обновлении стока: {e}")
                 raise e
+
+
+def get_user_info_by_id(user_id: int):
+    """Получение информации о пользователе по ID"""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT id, telegram_id, name, username, role 
+                FROM users 
+                WHERE telegram_id = %s
+            """, (user_id,))
+            user_info = cursor.fetchone()
+
+            if user_info:
+                return {
+                    'id': user_info[0],
+                    'telegram_id': user_info[1],
+                    'name': user_info[2],
+                    'username': user_info[3],
+                    'roles': user_info[4]
+                }
+            return None
 
 def get_all_products_with_stock(type_id=None):
     with get_connection() as conn:
