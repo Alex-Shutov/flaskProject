@@ -1,5 +1,6 @@
 import datetime
 import json
+from contextlib import contextmanager
 from typing import List, Dict, Optional
 
 import psycopg2
@@ -9,18 +10,38 @@ from psycopg2 import pool
 from config import DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DATABASE_CONFIG
 
 db_pool = psycopg2.pool.SimpleConnectionPool(
-    minconn=1,
-    maxconn=20,
+    minconn=5,
+    maxconn=50,
     **DATABASE_CONFIG
 )
 
-def get_connection():
-    return db_pool.getconn()
-
-
+def get_conn():
+    try:
+        return db_pool.getconn()
+    except Exception as e:
+        print(f"Error getting connection from pool: {e}")
+        # Если пул исчерпан, создаем новое соединение
+        return psycopg2.connect(**DATABASE_CONFIG)
 
 def return_connection(conn):
-    db_pool.putconn(conn)
+    try:
+        db_pool.putconn(conn)
+    except Exception as e:
+        print(f"Error returning connection to pool: {e}")
+        conn.close()
+
+
+@contextmanager
+def get_connection():
+    conn = get_conn()
+    try:
+        yield conn
+        conn.commit()  # Автоматический коммит при успешном выполнении
+    except Exception:
+        conn.rollback()  # Автоматический откат при ошибке
+        raise
+    finally:
+        return_connection(conn)
 
 # def get_connection():
 #     return psycopg2.connect(

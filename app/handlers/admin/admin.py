@@ -133,7 +133,6 @@ def handle_product_selection(call: types.CallbackQuery, state: StateContext):
 @bot.callback_query_handler(func=lambda call: call.data.endswith('-add'))
 def handle_add_action(call: types.CallbackQuery, state: StateContext):
     action = call.data.split('-')[0]
-    print(action)
     if action == 'type_product':
         bot.send_message(call.message.chat.id, "Введите название для типа продукта:")
         state.set(AdminStates.enter_type_product_name)
