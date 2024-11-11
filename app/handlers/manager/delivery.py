@@ -39,6 +39,8 @@ from states import DirectStates
 
 from database import get_connection as connection
 
+from app.main import logger
+
 # Инициализация менеджеров
 zone_manager = DeliveryZoneManager(connection, YANDEX_API_KEY)
 cost_calculator = DeliveryCostCalculator(connection)
@@ -191,7 +193,7 @@ def handle_delivery_date_selection(call: CallbackQuery, state: StateContext):
 
     except Exception as e:
         bot.answer_callback_query(call.id, "Произошла ошибка при выборе даты")
-        print(f"Error in handle_delivery_date_selection: {e}")
+        logger.warning(f"Error in handle_delivery_date_selection: {e}")
 
 
 @bot.message_handler(state=DeliveryStates.delivery_time)
@@ -235,7 +237,7 @@ def handle_delivery_time(message: Message, state: StateContext):
             "Произошла ошибка при обработке времени. "
             "Пожалуйста, попробуйте ввести время снова."
         )
-        print(f"Error in handle_delivery_time: {e}")
+        logger.warning(f"Error in handle_delivery_time: {e}")
 
 @bot.message_handler(state=DeliveryStates.contact_phone)
 def handle_contact_phone(message: Message, state: StateContext):
@@ -343,10 +345,8 @@ def finalize_delivery_order(chat_id,message_id,username, state: StateContext):
             product_dict = order_data.get("product_dict")
             if not product_dict:
                 raise ValueError("No products selected")
-            print(manager_info,'info')
+            logger.warning(manager_info,'info')
             # Создаем заказ с обновленными параметрами
-            print(order_data)
-            print(message_id)
             order_result = create_order(
                 product_dict=product_dict,  # Используем product_dict из состояния
                 gift=order_data.get('gift'),  # Базовый подарок если не указан
@@ -364,7 +364,6 @@ def finalize_delivery_order(chat_id,message_id,username, state: StateContext):
                 contact_name=order_data.get('contact_name'),
                 total_price=order_data.get('total_price')
             )
-            print(order_result,'result')
             if not order_result:
                 raise ValueError("Failed to create order")
 
@@ -419,4 +418,4 @@ def finalize_delivery_order(chat_id,message_id,username, state: StateContext):
             message_id,
             "Произошла ошибка при создании заказа. Пожалуйста, попробуйте еще раз."
         )
-        print(f"Error in finalize_delivery_order: {e}")
+        logger.error(f"Error in finalize_delivery_order: {e}")
