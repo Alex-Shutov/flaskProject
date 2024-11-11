@@ -1,3 +1,5 @@
+import logging
+
 from telebot import types
 from telebot.types import CallbackQuery, ReplyParameters, Message
 from telebot.states.sync.context import StateContext
@@ -32,12 +34,15 @@ from utils import validate_date_range
 from app_types import TripStatusRu, OrderTypeRu
 
 
+logger = logging.getLogger(__name__)
+
 def notify_couriers(order_message, state: StateContext,avito_photos=None, reply_message_id=None,):
     """Уведомляет всех курьеров о новом заказе"""
     try:
         # Получаем список всех курьеров
         couriers = get_couriers()
-
+        logger.warning(couriers)
+        logger.warning('couriers')
         for courier in couriers:
             markup = types.InlineKeyboardMarkup()
             markup.add(
