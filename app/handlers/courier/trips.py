@@ -47,10 +47,7 @@ from utils import is_valid_command
 from database import update_order_invoice_photo
 from utils import create_media_group, save_photo_and_resize
 import time
-
-# Инициализация соединения с БД
-connection = psycopg2.connect(**DATABASE_CONFIG)
-connection.set_session(autocommit=True)
+from database import get_connection as connection
 
 # Инициализация менеджеров
 trip_manager = CourierTripManager(connection)
@@ -1776,7 +1773,7 @@ def confirm_orders_selection(call: CallbackQuery, state: StateContext):
         state.add_data(
             trip_id=trip_id,
             orders_info=orders_info,
-            delivery_cost=delivery_cost.__dict__
+            delivery_cost=delivery_cost
         )
 
     except Exception as e:

@@ -37,9 +37,7 @@ from app_types import SaleType
 
 from states import DirectStates
 
-# Инициализация соединения с БД
-connection = psycopg2.connect(**DATABASE_CONFIG)
-connection.set_session(autocommit=True)
+from database import get_connection as connection
 
 # Инициализация менеджеров
 zone_manager = DeliveryZoneManager(connection, YANDEX_API_KEY)
