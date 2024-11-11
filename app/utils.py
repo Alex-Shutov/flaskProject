@@ -159,7 +159,7 @@ def save_photo_and_resize(photo, order_id):
     photo_path = f"{directory}{order_id}_avito.png"
 
     image = Image.open(io.BytesIO(photo))
-    image.save(photo_path, optimize=True, quality=85)  # Сжимаем фото
+    image.save(photo_path, optimize=True, quality=75)  # Сжимаем фото
 
     return photo_path
 

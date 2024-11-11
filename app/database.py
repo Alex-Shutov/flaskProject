@@ -5,16 +5,31 @@ from typing import List, Dict, Optional
 import psycopg2
 
 from app_types import OrderType
-from config import DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
+from psycopg2 import pool
+from config import DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DATABASE_CONFIG
+
+db_pool = psycopg2.pool.SimpleConnectionPool(
+    minconn=1,
+    maxconn=20,
+    **DATABASE_CONFIG
+)
 
 def get_connection():
-    return psycopg2.connect(
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        host=DB_HOST,
-        port=DB_PORT
-    )
+    return db_pool.getconn()
+
+
+
+def return_connection(conn):
+    db_pool.putconn(conn)
+
+# def get_connection():
+#     return psycopg2.connect(
+#         database=DB_NAME,
+#         user=DB_USER,
+#         password=DB_PASSWORD,
+#         host=DB_HOST,
+#         port=DB_PORT
+#     )
 
 def check_user_access(username):
     # Добавляем "@" и приводим к нижнему регистру
@@ -1864,39 +1879,129 @@ def get_courier_trips(courier_username: str, start_date: str, end_date: str):
 
             return trips
 
+
 def soft_delete_type_product(type_id: int) -> bool:
     """
-    Мягкое удаление типа продукта и всех связанных с ним продуктов.
+    Мягкое удаление типа продукта и всех связанных с ним продуктов
+    Args:
+        type_id: ID типа продукта
+    Returns:
+        bool: True если удаление прошло успешно
     """
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT soft_delete_type_product(%s)",
-                (type_id,)
-            )
-            return cursor.fetchone()[0] == False
+            try:
+                # Начинаем транзакцию
+                cursor.execute("BEGIN")
+
+                # Помечаем тип продукта как недоступный
+                cursor.execute("""
+                    UPDATE type_product 
+                    SET is_available = FALSE 
+                    WHERE id = %s
+                    RETURNING id
+                """, (type_id,))
+
+                if not cursor.fetchone():
+                    # Если тип не найден
+                    raise Exception("Type product not found")
+
+                # Помечаем все связанные продукты
+                cursor.execute("""
+                    UPDATE products
+                    SET is_available = FALSE
+                    WHERE type_id = %s
+                """, (type_id,))
+
+                # Помечаем все связанные параметры продуктов
+                cursor.execute("""
+                    UPDATE product_params pp
+                    SET is_available = FALSE
+                    FROM products p
+                    WHERE p.type_id = %s AND pp.product_id = p.id
+                """, (type_id,))
+
+                conn.commit()
+                return True
+
+            except Exception as e:
+                conn.rollback()
+                print(f"Error in soft_delete_type_product: {e}")
+                return False
+
 
 def soft_delete_product(product_id: int) -> bool:
     """
-    Мягкое удаление продукта и всех его параметров.
+    Мягкое удаление продукта и всех его параметров
+    Args:
+        product_id: ID продукта
+    Returns:
+        bool: True если удаление прошло успешно
     """
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT soft_delete_product(%s)",
-                (product_id,)
-            )
-            result = cursor.fetchone()[0]
-            return result == False
+            try:
+                # Начинаем транзакцию
+                cursor.execute("BEGIN")
+
+                # Помечаем продукт как недоступный
+                cursor.execute("""
+                    UPDATE products 
+                    SET is_available = FALSE 
+                    WHERE id = %s
+                    RETURNING id
+                """, (product_id,))
+
+                if not cursor.fetchone():
+                    # Если продукт не найден
+                    raise Exception("Product not found")
+
+                # Помечаем все параметры продукта
+                cursor.execute("""
+                    UPDATE product_params
+                    SET is_available = FALSE
+                    WHERE product_id = %s
+                """, (product_id,))
+
+                conn.commit()
+                return True
+
+            except Exception as e:
+                conn.rollback()
+                print(f"Error in soft_delete_product: {e}")
+                return False
+
 
 def soft_delete_product_param(param_id: int) -> bool:
     """
-    Мягкое удаление параметра продукта.
+    Мягкое удаление параметра продукта
+    Args:
+        param_id: ID параметра
+    Returns:
+        bool: True если удаление прошло успешно
     """
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT soft_delete_product_param(%s)",
-                (param_id,)
-            )
-            return cursor.fetchone()[0] == False
+            try:
+                # Начинаем транзакцию
+                cursor.execute("BEGIN")
+
+                # Помечаем параметр как недоступный
+                cursor.execute("""
+                    UPDATE product_params
+                    SET is_available = FALSE
+                    WHERE id = %s
+                    RETURNING id
+                """, (param_id,))
+
+                if not cursor.fetchone():
+                    # Если параметр не найден
+                    raise Exception("Product parameter not found")
+
+                conn.commit()
+                return True
+
+            except Exception as e:
+                conn.rollback()
+                print(f"Error in soft_delete_product_param: {e}")
+                return False

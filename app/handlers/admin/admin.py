@@ -259,6 +259,9 @@ def handle_view_command(call: types.CallbackQuery, state: StateContext):
     if command == "type_product":
         # Получаем список типов продуктов из базы данных
         type_products = get_all_type_products()
+        if not type_products:
+            bot.send_message(call.message.chat.id, "Типы продуктов не найдены.")
+            return
         for type_product in type_products:
             name = type_product['name']
             params = type_product['params']
@@ -276,6 +279,8 @@ def handle_view_command(call: types.CallbackQuery, state: StateContext):
 
             # Отправляем сообщение пользователю
             bot.send_message(call.message.chat.id, message_text)
+
+
 
     elif command == "product":
         # Получаем список продуктов для выбранного типа
