@@ -151,12 +151,12 @@ def process_manual_date(message: Message, state: StateContext):
         bot.reply_to(
             message,
             "Введите время доставки в любом удобном формате:\n"
-            "Примеры:\n"
-            "• 14:30\n"
-            "• с 14:30\n"
-            "• до 19:00\n"
-            "• с 14:30 до 19:00\n"
-            "• 14:30 - 19:00",
+            # "Примеры:\n"
+            # "• 14:30\n"
+            # "• с 14:30\n"
+            # "• до 19:00\n"
+            # "• с 14:30 до 19:00\n"
+            # "• 14:30 - 19:00",
         )
         state.set(DeliveryStates.delivery_time)
 
@@ -181,13 +181,13 @@ def handle_delivery_date_selection(call: CallbackQuery, state: StateContext):
 
         bot.edit_message_text(
             f"Выбрана дата: {display_date}\n\n"
-            "Введите время доставки в любом удобном формате:\n"
-            "Примеры:\n"
-            "• 14:30\n"
-            "• с 14:30\n"
-            "• до 19:00\n"
-            "• с 14:30 до 19:00\n"
-            "• 14:30 - 19:00",
+            "Введите время доставки в любом удобном формате:\n",
+            # "Примеры:\n"
+            # "• 14:30\n"
+            # "• с 14:30\n"
+            # "• до 19:00\n"
+            # "• с 14:30 до 19:00\n"
+            # "• 14:30 - 19:00",
             call.message.chat.id,
             call.message.message_id
         )

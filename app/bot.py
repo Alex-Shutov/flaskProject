@@ -9,7 +9,7 @@ from telebot.states import State, StatesGroup
 from redis_client import save_user_state, load_user_state, delete_user_state,redis_client
 import states
 
-state_storage = StateRedisStorage(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
+state_storage = StateRedisStorage(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, password=REDIS_PASSWORD)
 
 # Инициализируем бота с хранилищем состояний
 bot = TeleBot(BOT_TOKEN, state_storage=state_storage, use_class_middlewares=True)
