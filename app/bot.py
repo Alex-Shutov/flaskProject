@@ -3,7 +3,7 @@ from telebot.states.sync.middleware import StateMiddleware
 from telebot.storage import StateRedisStorage
 
 from middlewares.user_middleware import UsernameMiddleware
-from config import REDIS_HOST, REDIS_PORT, REDIS_DB
+from config import REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD
 from config import BOT_TOKEN
 from telebot.states import State, StatesGroup
 from redis_client import save_user_state, load_user_state, delete_user_state,redis_client
