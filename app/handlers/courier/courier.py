@@ -339,8 +339,21 @@ def accept_order(call: CallbackQuery, state: StateContext):
         # Снижаем количество товара на складе
         # decrement_stock(order_id=order_id)
 
-        # Привязываем заказ к курьеру и обновляем статус
-        update_order_courier(order_id, user_info['id'])
+        current_courier = update_order_courier(order_id, user_info['id'])
+
+        if current_courier:
+            # Заказ уже взят другим курьером
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("📋 Активные заказы", callback_data="show_active_orders"))
+
+            bot.edit_message_text(
+                f"Данный заказ забрал курьер {current_courier['name']} ({current_courier['username']})\n"
+                f"Вы можете посмотреть другие активные заказы",
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=markup
+            )
+            return
         update_order_status(order_id, OrderType.READY_TO_DELIVERY.value)
 
         # Отправляем сообщение курьеру
@@ -447,7 +460,7 @@ def process_delivery_stats_dates(message: types.Message):
         if delivered_orders:
             trip_message.append("✅ Доставлено:")
             for order_id, order_info in delivered_orders:
-                trip_message.append(f"\n📦 Заказ #{str(order_id).zfill(4)}")
+                trip_message.append(f"\n📦 Заказ #{str(order_id).zfill(4)}ㅤ")
                 if order_info['type'] == 'avito':
                     trip_message.append("📍 Авито")
                     for track in sorted(order_info['tracking_numbers']):
@@ -461,7 +474,7 @@ def process_delivery_stats_dates(message: types.Message):
         if returned_orders:
             trip_message.append("\n❌ Возвращено:")
             for order_id, order_info in returned_orders:
-                trip_message.append(f"\n📦 Заказ #{str(order_id).zfill(4)}")
+                trip_message.append(f"\n📦 Заказ #{str(order_id).zfill(4)}ㅤ")
                 if order_info['type'] == 'avito':
                     trip_message.append("📍 Авито")
                     for track in sorted(order_info['tracking_numbers']):
@@ -475,7 +488,7 @@ def process_delivery_stats_dates(message: types.Message):
         if pending_orders:
             trip_message.append("\n⏳ В ожидании:")
             for order_id, order_info in pending_orders:
-                trip_message.append(f"\n📦 Заказ #{str(order_id).zfill(4)}")
+                trip_message.append(f"\n📦 Заказ #{str(order_id).zfill(4)}ㅤ")
                 if order_info['type'] == 'avito':
                     trip_message.append("📍 Авито")
                     for track in sorted(order_info['tracking_numbers']):

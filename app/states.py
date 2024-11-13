@@ -29,6 +29,7 @@ class AvitoStates(StatesGroup):
 
 
 class CourierStates(StatesGroup):
+    current_message_to_edit=State()
     accepted = State()
     orders=State()
     reply_message_id=State()
@@ -97,3 +98,4 @@ class DeliveryStates(StatesGroup):
     total_amount=State()   # объект для avito
     delivery_time=State()   # объект для avito
     manual_date_input = State()
+

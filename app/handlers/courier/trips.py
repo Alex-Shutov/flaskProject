@@ -230,6 +230,7 @@ def show_avito_order(call: CallbackQuery, state: StateContext):
                 avito_order_shown= True,
                 current_order_id= order_id,
                 avito_message_id= new_message.message_id,
+                current_message_to_edit = new_message.message_id,
             )
         else:
             # Если заказ уже показывался, просто обновляем существующее сообщение
@@ -241,14 +242,14 @@ def show_avito_order(call: CallbackQuery, state: StateContext):
             markup = get_avito_order_markup(order_id, track_numbers, current_order_selections)
 
             if message_text != previous_message:
-                bot.edit_message_text(
+                mes = bot.edit_message_text(
                     message_text,
                     call.message.chat.id,
                     avito_message_id,
                     reply_markup=markup
                 )
                 # Сохраняем новый текст сообщения
-                state.add_data(previous_message_text=message_text)
+                state.add_data(previous_message_text=message_text, current_message_to_edit=mes.id)
 
     except Exception as e:
         bot.answer_callback_query(call.id, "Ошибка при отображении заказа")
@@ -750,13 +751,13 @@ def toggle_avito_item_selection(call: CallbackQuery, state: StateContext):
         message_text = get_avito_order_message(order, track_numbers, selected_items.get(str(order_id), []))
         markup = get_avito_order_markup(order_id, track_numbers, selected_items.get(str(order_id), []))
 
-        bot.edit_message_text(
+        mes = bot.edit_message_text(
             message_text,
             call.message.chat.id,
             avito_message_id,
             reply_markup=markup
         )
-
+        state.add_data(current_message_to_edit=mes.message_id)
         bot.answer_callback_query(
             call.id,
             f"Трек-номер {action} поездку"
@@ -1020,7 +1021,7 @@ def show_order_items(call: CallbackQuery, state: StateContext):
         )
 
         # Обновляем сообщение
-        bot.edit_message_text(
+        mes = bot.edit_message_text(
             '\n'.join(message_text),
             call.message.chat.id,
             call.message.message_id,
@@ -1028,7 +1029,7 @@ def show_order_items(call: CallbackQuery, state: StateContext):
         )
 
         # Сохраняем текущий заказ в состоянии
-        state.add_data(current_order_id=order_id)
+        state.add_data(current_order_id=order_id,current_message_to_edit=mes.message_id)
 
     except Exception as e:
         bot.answer_callback_query(call.id, "Ошибка при отображении товаров")
@@ -1094,11 +1095,12 @@ def toggle_item_selection(call: CallbackQuery, state: StateContext):
         )
 
         try:
-            bot.edit_message_reply_markup(
+            mes = bot.edit_message_reply_markup(
                 call.message.chat.id,
                 call.message.message_id,
                 reply_markup=markup
             )
+            state.add_data(current_message_to_edit=mes.message_id)
         except Exception as telegram_error:
             if "message is not modified" not in str(telegram_error):
                 raise telegram_error
@@ -1158,10 +1160,11 @@ def back_to_orders_list(call: CallbackQuery, state: StateContext):
             avito_message_id = data.get('avito_message_id')
             avito_photos_messages = data.get('avito_photos_messages', [])
             selected_items = data.get('selected_items', {})
+            message_to_edit = data.get('current_message_to_edit',{})
 
             # Удаляем сообщение с авито заказом
-        if avito_message_id:
-            bot.delete_message(call.message.chat.id, avito_message_id)
+        # if avito_message_id:
+        #     bot.delete_message(call.message.chat.id, avito_message_id)
 
             # Удаляем все фотографии
         for photo_message_id in avito_photos_messages:
@@ -1182,9 +1185,10 @@ def back_to_orders_list(call: CallbackQuery, state: StateContext):
         # Создаем клавиатуру с учетом выбранных товаров
         markup = get_orders_keyboard(orders, selected_items)
 
-        new_message = bot.send_message(
-            call.message.chat.id,
+        new_message = bot.edit_message_text(
             "Выберите заказы для добавления товаров в поездку:",
+            call.message.chat.id,
+            message_to_edit,
             reply_markup=markup
         )
 
@@ -1195,7 +1199,8 @@ def back_to_orders_list(call: CallbackQuery, state: StateContext):
             'avito_order_shown',
             'avito_message_id',
             'current_order_id'
-            'avito_photos_messages'
+            'avito_photos_messages',
+            'current_message_to_edit'
         ])
         state.add_data(orders_message_id=new_message.message_id)
 
@@ -2222,6 +2227,7 @@ def proceed_with_delivery(call: CallbackQuery, state: StateContext):
 @bot.message_handler(state=CourierStates.entering_delivery_sum)
 def handle_delivery_sum(message: Message, state: StateContext):
     """Обработчик ввода суммы доставки"""
+    if not is_valid_command(message.text, state): return
     try:
         delivery_sum = float(message.text)
 

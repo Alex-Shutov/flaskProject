@@ -114,7 +114,7 @@ def handle_orders(message: types.Message, state: StateContext):
 @bot.callback_query_handler(func=lambda call: call.data == 'orders_pack')
 def handle_orders_pack(call: types.CallbackQuery,state: StateContext):
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("Взять заказ в упаковку", callback_data='orders_pack_goods'))
+    markup.add(types.InlineKeyboardButton("Взять в упаковку", callback_data='orders_pack_goods'))
     markup.add(types.InlineKeyboardButton("Мои заказы(в упаковке)", callback_data='orders_in_packing'))
     state.set(AppStates.picked_action)
     bot.send_message(call.message.chat.id, "Выберите действие:", reply_markup=markup)
@@ -326,7 +326,7 @@ def show_packing_orders(call: types.CallbackQuery, state: StateContext):
             print(order,2)
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(
-                "📦 Упаковать товар",
+                "📦 Упаковать товар !!!",
                 callback_data=f"pack_goods_{order['id']}_{order['message_id']}"
             ))
 
@@ -406,8 +406,8 @@ def handle_packed_order(call: types.CallbackQuery, state: StateContext):
        reply_params = ReplyParameters(message_id=int(message_to_reply))
        bot.send_message(
            CHANNEL_CHAT_ID,
-           f"Заказ #{str(order_id).zfill(4)}ㅤ упакован\n"
-           f"Упаковал: {user_info['name']} (@{user_info['username']})",
+           f"Заказ #{str(order_id).zfill(4)}ㅤ \nУпакован\n"
+           f"Упаковал: {user_info['name']} ({user_info['username']})",
            reply_parameters=reply_params
        )
 

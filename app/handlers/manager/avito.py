@@ -391,12 +391,14 @@ def handle_pack_order(call: types.CallbackQuery):
     order_id = call.data.split('_')[2]
     message_to_reply = call.data.split('_')[3]
     user_info = get_user_info(call.from_user.username)
-
+    #TODo если упаковщик выбран - блокируем его изменние
     if user_info:
         update_order_packer(order_id, user_info['id'])
         update_order_status(order_id, OrderType.IN_PACKING.value)
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("Мои заказы(в упаковке)", callback_data='orders_in_packing'))
+
+        markup.add(types.InlineKeyboardButton("📦 Упаковать товар !!!",
+                callback_data=f"pack_goods_{order_id}_{message_to_reply}"))
         # Проверяем, есть ли в сообщении фото (caption)
         if call.message.photo:
             # Меняем описание под фото
@@ -405,11 +407,12 @@ def handle_pack_order(call: types.CallbackQuery):
                 message_id=call.message.message_id,
                 chat_id=call.message.chat.id
 
+
             )
         else:
             # Меняем текст сообщения
-            bot.edit_message_text(
-                f"Вы выбрали упаковать заказ #{str(order_id).zfill(4)}ㅤ\nДанный заказ вы сможете найти по кнопке \"Упаковать товар\"",
+            bot.edit_message_reply_markup(
+                # f"Вы выбрали упаковать заказ #{str(order_id).zfill(4)}ㅤ\nДанный заказ вы сможете найти по кнопке \"Упаковать товар\"",
                 message_id=call.message.message_id,
                 chat_id=call.message.chat.id,
                 reply_markup=markup
@@ -420,7 +423,7 @@ def handle_pack_order(call: types.CallbackQuery):
         print('order_id')
         bot.send_message(
             CHANNEL_CHAT_ID,
-            f"Заказ #{str(order_id).zfill(4)}ㅤ принят в упаковку \nУпакует {user_info['name']} ({user_info['username']})",
+            f"Заказ #{str(order_id).zfill(4)}ㅤ \nПринят в упаковку \nУпакует {user_info['name']} ({user_info['username']})",
             reply_parameters=reply_params,
         )
     else:

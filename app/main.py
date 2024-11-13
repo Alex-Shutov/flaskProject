@@ -1,8 +1,10 @@
 import logging
 import ssl
-from flask import Flask, request, abort
+from flask import Flask, request, abort, jsonify
 from telebot import types, custom_filters
 from telebot.storage import StateRedisStorage
+
+from database import pool_stats, db_pool
 from shedule import  init_scheduler, create_scheduler_endpoints
 from config import BOT_TOKEN, WEBHOOK_URL, DEBUG, PORT, SSL_CERT, SSL_PRIV, SERVER_HOST, SERVER_PORT, SECRET_TOKEN
 from bot import get_bot_instance
@@ -75,6 +77,135 @@ def set_webhook():
 def remove_webhook():
     bot.remove_webhook()
     return "Webhook removed", 200
+
+
+@app.route('/pool/status')
+def pool_status():
+    """Текущий статус пула"""
+    try:
+        return jsonify({
+            'status': 'active',
+            'min_connections': db_pool.minconn,
+            'max_connections': db_pool.maxconn,
+            'used_connections': len(db_pool._used),
+            'free_connections': len(db_pool._pool),
+            'total_requests': pool_stats.total_requests,
+            'failed_requests': pool_stats.failed_requests,
+            'last_error': pool_stats.last_error,
+            'last_error_time': pool_stats.last_error_time
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/pool/history')
+def pool_history():
+    """История использования пула"""
+    return jsonify(pool_stats.connection_history)
+
+
+@app.route('/pool/connections/active')
+def active_connections():
+    """Информация об активных соединениях"""
+    active_conns = []
+    for conn in db_pool._used:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pid, backend_start, query_start, state_change, state FROM pg_stat_activity WHERE pid = pg_backend_pid()")
+                conn_info = cursor.fetchone()
+                if conn_info:
+                    active_conns.append({
+                        'pid': conn_info[0],
+                        'backend_start': conn_info[1].isoformat() if conn_info[1] else None,
+                        'query_start': conn_info[2].isoformat() if conn_info[2] else None,
+                        'state_change': conn_info[3].isoformat() if conn_info[3] else None,
+                        'state': conn_info[4]
+                    })
+        except Exception as e:
+            active_conns.append({'error': str(e)})
+
+    return jsonify(active_conns)
+
+
+@app.route('/pool/'+SECRET_TOKEN+'/health')
+def pool_health():
+    """Проверка здоровья пула"""
+    health_status = {
+        'is_healthy': True,
+        'issues': []
+    }
+
+    # Проверяем использование пула
+    used_ratio = len(db_pool._used) / db_pool.maxconn
+    if used_ratio > 0.8:
+        health_status['is_healthy'] = False
+        health_status['issues'].append(f'High pool usage: {used_ratio * 100:.1f}%')
+
+    # Проверяем ошибки
+    if pool_stats.failed_requests > 0:
+        error_ratio = pool_stats.failed_requests / pool_stats.total_requests
+        if error_ratio > 0.1:  # Более 10% ошибок
+            health_status['is_healthy'] = False
+            health_status['issues'].append(f'High error rate: {error_ratio * 100:.1f}%')
+
+    return jsonify(health_status)
+
+
+@app.route('/pool/'+SECRET_TOKEN+'/reset')
+def reset_stats():
+    """Сброс статистики"""
+    with pool_stats.stats_lock:
+        pool_stats.total_requests = 0
+        pool_stats.failed_requests = 0
+        pool_stats.last_error = None
+        pool_stats.last_error_time = None
+        pool_stats.connection_history = []
+    return jsonify({'message': 'Stats reset successfully'})
+
+
+# Добавим простой HTML интерфейс
+@app.route('/pool/'+SECRET_TOKEN)
+def index():
+    return """
+    <html>
+        <head>
+            <title>DB Pool Monitor</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; }
+                .card { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; }
+                .error { color: red; }
+                .success { color: green; }
+            </style>
+            <script>
+                function updateStats() {
+                    fetch('/pool/status')
+                        .then(response => response.json())
+                        .then(data => {
+                            document.getElementById('poolStatus').innerHTML = 
+                                `<h3>Pool Status</h3>
+                                 <p>Used Connections: ${data.used_connections}</p>
+                                 <p>Free Connections: ${data.free_connections}</p>
+                                 <p>Total Requests: ${data.total_requests}</p>
+                                 <p>Failed Requests: ${data.failed_requests}</p>
+                                 ${data.last_error ? `<p class="error">Last Error: ${data.last_error}</p>` : ''}`;
+                        });
+                }
+
+                // Обновляем каждые 5 секунд
+                setInterval(updateStats, 5000);
+                updateStats();
+            </script>
+        </head>
+        <body>
+            <h1>Database Pool Monitor</h1>
+            <div id="poolStatus" class="card"></div>
+            <div class="card">
+                <h3>Actions</h3>
+                <button onclick="fetch('/pool/reset')">Reset Stats</button>
+            </div>
+        </body>
+    </html> """
 
 
 

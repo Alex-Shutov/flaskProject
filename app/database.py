@@ -1,6 +1,7 @@
-import datetime
+from datetime import datetime, timedelta
 import json
 from contextlib import contextmanager
+from threading import Lock
 from typing import List, Dict, Optional
 
 import psycopg2
@@ -9,12 +10,58 @@ from app_types import OrderType
 from psycopg2 import pool
 from config import DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DATABASE_CONFIG
 
+class PoolStats:
+    def __init__(self):
+        self.total_requests = 0
+        self.failed_requests = 0
+        self.last_error = None
+        self.last_error_time = None
+        self.stats_lock = Lock()
+        self.connection_history = []  # История использования пула
+        self.MAX_HISTORY = 100  # Хранить последние 100 записей
+
+pool_stats = PoolStats()
+
 db_pool = psycopg2.pool.SimpleConnectionPool(
     minconn=5,
     maxconn=50,
     **DATABASE_CONFIG
 )
 
+
+# Декоратор для сбора статистики
+def track_connection_usage(func):
+    def wrapper(*args, **kwargs):
+        with pool_stats.stats_lock:
+            pool_stats.total_requests += 1
+            try:
+                start_time = datetime.now()
+                result = func(*args, **kwargs)
+                end_time = datetime.now()
+
+                # Записываем статистику использования
+                pool_stats.connection_history.append({
+                    'timestamp': start_time.isoformat(),
+                    'duration': (end_time - start_time).total_seconds(),
+                    'success': True,
+                    'used_connections': len(db_pool._used),
+                    'free_connections': len(db_pool._pool)
+                })
+
+                # Ограничиваем размер истории
+                if len(pool_stats.connection_history) > pool_stats.MAX_HISTORY:
+                    pool_stats.connection_history.pop(0)
+
+                return result
+            except Exception as e:
+                pool_stats.failed_requests += 1
+                pool_stats.last_error = str(e)
+                pool_stats.last_error_time = datetime.now().isoformat()
+                raise
+
+    return wrapper
+
+@track_connection_usage
 def get_conn():
     try:
         return db_pool.getconn()
@@ -547,21 +594,43 @@ def get_product_param_by_id(param_id):
 
 def update_order_courier(order_id, courier_id):
     """
-    Обновляет заказ, привязывая к нему курьера.
+    Пытается обновить курьера заказа. Если заказ уже имеет курьера,
+    возвращает информацию о текущем курьере.
 
-    Аргументы:
-    - order_id: идентификатор заказа.
-    - courier_id: идентификатор курьера.
+    Args:
+        order_id: идентификатор заказа
+        courier_id: идентификатор нового курьера
+
+    Returns:
+        None если обновление успешно, или dict с информацией о текущем курьере
     """
     with get_connection() as conn:
         with conn.cursor() as cursor:
+            # Сначала проверяем текущего курьера
             cursor.execute("""
-                UPDATE orders
-                SET courier_id = %s
-                WHERE id = %s
-            """, (courier_id, order_id))
-            conn.commit()
+                            SELECT jsonb_build_object(
+                                'name', u.name,
+                                'username', u.username
+                            )
+                            FROM orders o
+                            JOIN users u ON o.courier_id = u.id
+                            WHERE o.id = %s AND o.courier_id != %s
+                        """, (order_id, courier_id))
 
+            result = cursor.fetchone()
+            if result:
+                # Если есть другой курьер, возвращаем его данные
+                return result[0]
+
+            # Если курьера нет или это тот же самый курьер, обновляем/назначаем
+            cursor.execute("""
+                            UPDATE orders
+                            SET courier_id = %s
+                            WHERE id = %s AND (courier_id IS NULL OR courier_id = %s)
+                        """, (courier_id, order_id, courier_id))
+
+            conn.commit()
+            return None
 
 def update_order_invoice_photo(order_id: int, tracking_number: str, photo_path: str) -> bool:
     """
@@ -967,6 +1036,7 @@ def get_all_products(type_product_id):
                 SELECT id, name,product_values, param_parameters, created_at 
                 FROM products
                 WHERE type_id = %s
+                AND is_available = True
             """
             cursor.execute(query, (type_product_id,))
             result = cursor.fetchall()
@@ -1003,6 +1073,7 @@ def get_all_product_params(product_id):
                 SELECT id, title, param_values, created_at 
                 FROM product_params
                 WHERE product_id = %s
+                AND is_available = True
             """
             cursor.execute(query, (product_id,))
             result = cursor.fetchall()
