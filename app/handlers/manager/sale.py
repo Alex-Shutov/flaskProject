@@ -38,6 +38,8 @@ from database import update_order_message_id
 
 from states import DirectStates
 
+from database import get_setting_value
+
 # Инициализация хранилища состояний
 bot = get_bot_instance()
 
@@ -204,7 +206,14 @@ def handle_additional_product(call: types.CallbackQuery, state: StateContext):
 def skip_gift(call: types.CallbackQuery, state: StateContext):
     # Пропускаем ввод подарка
     # TODO добавить базовые параметры из типа продукта
-    state.add_data(gift="Гирлянда 2м")
+    try:
+        default_present = get_setting_value('default_present')
+        if not default_present:
+            default_present = "Гирлянда 3м"
+    except Exception:
+        default_present = "Гирлянда 3м"
+
+    state.add_data(gift=default_present)
     # Переходим к состоянию примечания
     state.set(SaleStates.note)
     markup = types.InlineKeyboardMarkup()

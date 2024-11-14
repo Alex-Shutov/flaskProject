@@ -1883,7 +1883,15 @@ def get_setting_value(key: str) -> float:
         with conn.cursor() as cursor:
             cursor.execute("SELECT value FROM base_settings WHERE key = %s", (key,))
             result = cursor.fetchone()
-            return float(result[0]) if result else 0
+            if not result:
+                return None
+
+            value = result[0]
+            try:
+                return float(value)
+            except ValueError:
+                return value
+
 
 def update_setting_value(key: str, value: float) -> bool:
     """Обновляет значение настройки"""

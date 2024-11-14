@@ -46,7 +46,7 @@ def start_edit_settings(call: types.CallbackQuery, state: StateContext):
     for key, value, _ in settings:
         markup.add(types.InlineKeyboardButton(
             f"{key}: {value}",
-            callback_data=f"edit_setting_{key}"
+            callback_data=f"edit#setting#{key}"
         ))
 
     bot.edit_message_text(
@@ -57,9 +57,9 @@ def start_edit_settings(call: types.CallbackQuery, state: StateContext):
     )
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("edit_setting_"))
+@bot.callback_query_handler(func=lambda call: call.data.startswith("edit#setting#"))
 def edit_setting_value(call: types.CallbackQuery, state: StateContext):
-    setting_key = call.data.split('_')[2]
+    setting_key = call.data.split('#')[2]
     state.set(AdminStates.edit_setting)
     state.add_data(editing_setting=setting_key)
 
@@ -73,15 +73,19 @@ def edit_setting_value(call: types.CallbackQuery, state: StateContext):
 @bot.message_handler(state=AdminStates.edit_setting)
 def handle_new_setting_value(message: types.Message, state: StateContext):
     try:
-        new_value = float(message.text)
         with state.data() as data:
             setting_key = data['editing_setting']
+
+        new_value = message.text.strip()
 
         if update_setting_value(setting_key, new_value):
             bot.reply_to(message, f"Значение {setting_key} успешно обновлено на {new_value}")
         else:
             bot.reply_to(message, "Произошла ошибка при обновлении значения")
     except ValueError:
-        bot.reply_to(message, "Пожалуйста, введите числовое значение")
+        if setting_key == 'default_present':
+            bot.reply_to(message, "Пожалуйста, введите текстовое значение")
+        else:
+            bot.reply_to(message, "Пожалуйста, введите числовое значение")
 
     state.delete()
