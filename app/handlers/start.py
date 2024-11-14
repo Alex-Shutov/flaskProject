@@ -94,7 +94,12 @@ def start(message,state:StateContext):
         bot.set_my_commands(general_command,scope=types.BotCommandScopeChat(message.chat.id))
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(*available_buttons)
-    bot.send_message(message.chat.id, f"Добро пожаловать, {user_access['name']}! Выберите действие:", reply_markup=markup)
+    bot.send_message(message.chat.id, f"Добро пожаловать, {user_access['name']}!", reply_markup=markup)
+    manager_markdown = '\n\n*\#Продажа* отвечает за создание заказа' if "Manager" in user_access['roles'] else ''
+    courier_markdown = '\n\n*\#Доставка* отвечает за работу с доставкой товара, построение маршрутов и истории поездок' if "Courier" in user_access['roles'] else ''
+    bot.send_message(message.chat.id, f"По значку *слева* от микрофона вам откроется панель действий\!{manager_markdown}{courier_markdown}\n\n*\#Заказы* для просмотра истории и работой с упаковкой товаров", parse_mode='MarkdownV2')
+    bot.send_message(message.chat.id, f"Также слева вы найдете кнопку *Меню*, через нее вы можете _перезагрузить бота_ или _передать заказ или доставку_ другому пользователю", parse_mode='MarkdownV2')
+    bot.send_message(message.chat.id, f"Если вдруг у вас случилась ошибка, вот ваши действия\n1\. Перезагрузить бота\(кнопка в меню\)\. Для корректной работы может потребоваться *нажать 2 раза*\n2\. Если ошибка не ушла, написать команду *\/start* в чат с ботом\.\n3\. Обратиться ко мне за помощью, @ni3omi\(Леша\)", parse_mode='MarkdownV2')
 
 @bot.message_handler(func=lambda message: message.text == '#Заказы')
 def handle_orders(message: types.Message, state: StateContext):
@@ -110,7 +115,7 @@ def handle_orders(message: types.Message, state: StateContext):
     # Дополнительные кнопки для курьеров
 
     state.set(AppStates.picked_action)
-    bot.send_message(message.chat.id, "Выберите действие:", reply_markup=markup)
+    bot.send_message(message.chat.id, "Вы попали в меню *заказов\!*\n\nЕсли вы хотите посмотреть _историю продаж или упаковки_, нажмите *История заказов*\n\nЕсли вы хотите упаковать товар, нажмите *Упаковка товара*", parse_mode="MarkdownV2", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'orders_pack')
 def handle_orders_pack(call: types.CallbackQuery,state: StateContext):
@@ -118,7 +123,7 @@ def handle_orders_pack(call: types.CallbackQuery,state: StateContext):
     markup.add(types.InlineKeyboardButton("Взять в упаковку", callback_data='orders_pack_goods'))
     markup.add(types.InlineKeyboardButton("Мои заказы(в упаковке)", callback_data='orders_in_packing'))
     state.set(AppStates.picked_action)
-    bot.send_message(call.message.chat.id, "Выберите действие:", reply_markup=markup)
+    bot.send_message(call.message.chat.id, "Если вы хотите взять заказ в упаковку, нажмите *Взять в упаковку*\n\nЕсли хотите посмотреть ваши заказы, которые находятся на упаковке \- *Мои заказы\(в упаковке\)*\n\nОбратите внимание: Если вы считаете, что упаковали товар, вы должны нажать кнопку *Упаковать товар*\(появится после нажатия на *Взять в упаковку*\)", parse_mode="MarkdownV2", reply_markup=markup)
 
 # Обработчик истории заказов
 @bot.callback_query_handler(func=lambda call: call.data == 'orders_show_history', state=AppStates.picked_action)

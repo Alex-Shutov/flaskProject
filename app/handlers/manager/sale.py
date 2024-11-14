@@ -451,6 +451,6 @@ def handle_cancel_order(call: types.CallbackQuery, state: StateContext):
     markup.add(types.InlineKeyboardButton("Доставка", callback_data="sale_delivery"))
     markup.add(types.InlineKeyboardButton("Авито", callback_data="sale_avito"))
 
-    bot.send_message(chat_id, "Выберите тип продажи:", reply_markup=markup)
+    bot.send_message(chat_id, "Выберите тип продажи:\n\n", reply_markup=markup)
 
 
