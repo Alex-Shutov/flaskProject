@@ -144,8 +144,8 @@ def generate_detailed_sales_report(start_date, end_date, filename="detailed_sale
                 "",
                 get_delivery_info(order),
                 OrderTypeRu[order['status'].upper()].value,
-                f"{order['manager_name']} (@{order['manager_username']})",
-                f"{order['packer_name']} (@{order['packer_username']})" if order['packer_name'] else "",
+                f"{order['manager_name']} ({order['manager_username']})",
+                f"{order['packer_name']} ({order['packer_username']})" if order['packer_name'] else "",
                 get_courier_info(order),
                 order.get('note', ''),
                 order.get('delivery_note', ''),
@@ -182,8 +182,8 @@ def generate_detailed_sales_report(start_date, end_date, filename="detailed_sale
                     OrderTypeRu[item['status'].upper()].value,
                     get_delivery_info(order) if order['order_type'] == 'delivery' else item.get('tracking_number', ''),
                     OrderTypeRu[order['status'].upper()].value,  # Дублируем статус заказа
-                    f"{order['manager_name']} (@{order['manager_username']})",  # Дублируем менеджера
-                    f"{order['packer_name']} (@{order['packer_username']})" if order.get('packer_name') else "",
+                    f"{order['manager_name']} ({order['manager_username']})",  # Дублируем менеджера
+                    f"{order['packer_name']} ({order['packer_username']})" if order.get('packer_name') else "",
                     # Дублируем упаковщика
                     get_courier_info(order),  # Дублируем курьера
                     "",
@@ -356,7 +356,7 @@ def get_courier_info(order):
     """Формирует информацию о курьере"""
 
     if order.get('courier_name'):
-        return f"{order['courier_name']} (@{order['courier_username']})"
+        return f"{order['courier_name']} ({order['courier_username']})"
     return ''
 
 
@@ -574,7 +574,7 @@ def generate_courier_trips_report(workbook, start_date, end_date):
         trip_row = [
             trip_id,
             SaleTypeRu[order_type.upper()].value,
-            f"{courier_name} (@{courier_username})",
+            f"{courier_name} ({courier_username})",
             "",
             "",
             "",
@@ -607,7 +607,7 @@ def generate_courier_trips_report(workbook, start_date, end_date):
             item_row = [
                 trip_id,
                 SaleTypeRu[order_type.upper()].value,
-                f"{courier_name} (@{courier_username})",
+                f"{courier_name} ({courier_username})",
                 item['delivery_address'] if order_type == 'delivery' else item['tracking_number'],
                 zone_name if order_type == 'delivery' else "",
                 base_price if order_type == 'delivery' else "",

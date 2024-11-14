@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 import json
 from contextlib import contextmanager
 from threading import Lock
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 
 import psycopg2
 
@@ -706,20 +706,43 @@ def get_all_users(roles=None):
 
 def update_order_packer(order_id, packer_id):
     """
-    Обновляет ID упаковщика для конкретного заказа.
+    Пытается обновить упаковщика заказа. Если заказ уже имеет упаковщика,
+    возвращает информацию о текущем упаковщике.
 
-    :param order_id: ID заказа
-    :param packer_id: ID упаковщика (пользователя)
-    :return: None
+    Args:
+        order_id: ID заказа
+        packer_id: ID нового упаковщика
+
+    Returns:
+        None если обновление успешно, или dict с информацией о текущем упаковщике
     """
     with get_connection() as conn:
         with conn.cursor() as cursor:
+            # Сначала проверяем текущего упаковщика
+            cursor.execute("""
+                SELECT jsonb_build_object(
+                    'name', u.name,
+                    'username', u.username
+                )
+                FROM orders o
+                JOIN users u ON o.packer_id = u.id
+                WHERE o.id = %s AND o.packer_id != %s
+            """, (order_id, packer_id))
+
+            result = cursor.fetchone()
+            if result:
+                # Если есть другой упаковщик, возвращаем его данные
+                return result[0]
+
+            # Если упаковщика нет или это тот же самый упаковщик, обновляем/назначаем
             cursor.execute("""
                 UPDATE orders
                 SET packer_id = %s
-                WHERE id = %s
-            """, (packer_id, order_id))
+                WHERE id = %s AND (packer_id IS NULL OR packer_id = %s)
+            """, (packer_id, order_id, packer_id))
+
             conn.commit()
+            return None
 
 
 def get_active_orders_without_packer():
@@ -1286,7 +1309,7 @@ def decrement_stock(order_id=None, product_id=None, product_param_id=None, quant
                 raise e
 
 
-def get_user_info_by_id(user_id: int):
+def get_user_info_by_telegram_id(user_id: int):
     """Получение информации о пользователе по ID"""
     with get_connection() as conn:
         with conn.cursor() as cursor:
@@ -1378,7 +1401,7 @@ def get_all_products_with_stock(type_id=None):
 def get_user_info_by_id(user_id):
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            query = "SELECT id, name, username FROM users WHERE id = %s"
+            query = "SELECT id, name, username,telegram_id FROM users WHERE id = %s"
             cursor.execute(query, (user_id,))
             result = cursor.fetchone()
 
@@ -1386,7 +1409,8 @@ def get_user_info_by_id(user_id):
                 return {
                     'id': result[0],
                     'name': result[1],
-                    'username': result[2]
+                    'username': result[2],
+                    'telegram_id': result[3]
                 }
             return None
 
@@ -1468,9 +1492,9 @@ def get_detailed_orders(start_date, end_date, type_id=None):
             'product_values': product_values,
             'product_param_title': product_param_title,
             'product_param_values': product_param_values,
-            'manager_name': f"{manager_name} (@{manager_username})",
-            'courier_name': f"{courier_name} (@{courier_username})",
-            'packer_name': f"{packer_name} (@{packer_username})",
+            'manager_name': f"{manager_name} ({manager_username})",
+            'courier_name': f"{courier_name} ({courier_username})",
+            'packer_name': f"{packer_name} ({packer_username})",
             'closed_date': order.get('closed_date'),
         }
         detailed_orders.append(detailed_order)
@@ -2097,3 +2121,74 @@ def soft_delete_product_param(param_id: int) -> bool:
                 conn.rollback()
                 print(f"Error in soft_delete_product_param: {e}")
                 return False
+
+
+def transfer_order_to_user(order_id: int, new_user_id: int, role: str) -> bool:
+    """
+    Передает заказ другому пользователю в зависимости от роли.
+
+    Args:
+        order_id: ID заказа
+        new_user_id: ID нового пользователя
+        role: 'courier' или 'packer'
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                if role == 'courier':
+                    cursor.execute("""
+                        UPDATE orders
+                        SET courier_id = %s
+                        WHERE id = %s AND status = 'ready_to_delivery'
+                        RETURNING id
+                    """, (new_user_id, order_id))
+                else:
+                    cursor.execute("""
+                        UPDATE orders
+                        SET packer_id = %s
+                        WHERE id = %s AND status = 'in_packing'
+                        RETURNING id
+                    """, (new_user_id, order_id))
+
+                conn.commit()
+                return cursor.fetchone() is not None
+            except Exception as e:
+                print(f"Error in transfer_order_to_user: {e}")
+                return False
+
+
+def get_users_by_role(roles: Union[str, List[str]]) -> List[Dict]:
+    """
+    Получает список пользователей с указанными ролями.
+
+    Args:
+        roles: Роль или список ролей для фильтрации пользователей
+
+    Returns:
+        List[Dict]: Список словарей с информацией о пользователях
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            if isinstance(roles, str):
+                roles = [roles]
+
+            # Формируем условие для проверки на любую из указанных ролей
+            roles_condition = " OR ".join(["%s = ANY(role)" for _ in roles])
+            query = f"""
+                SELECT DISTINCT id, name, username, telegram_id
+                FROM users
+                WHERE {roles_condition}
+                ORDER BY name
+            """
+
+            cursor.execute(query, tuple(roles))
+
+            # Получаем имена колонок
+            columns = [desc[0] for desc in cursor.description]
+
+            # Преобразуем результаты в список словарей
+            result = []
+            for row in cursor.fetchall():
+                result.append(dict(zip(columns, row)))
+
+            return result

@@ -48,9 +48,9 @@ class DeliveryAddressStates(StatesGroup):
 
 def get_city_keyboard() -> types.ReplyKeyboardMarkup:
     """Создает клавиатуру с выбором города"""
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    markup.add(types.InlineKeyboardButton("Екатеринбург"))
-    return markup
+    # markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    # markup.add(types.InlineKeyboardButton("Екатеринбург"))
+    # return markup
 
 
 def get_apartment_keyboard() -> types.InlineKeyboardMarkup:
@@ -425,7 +425,7 @@ def handle_retry_address(call: CallbackQuery, state: StateContext):
         bot.send_message(
             call.message.chat.id,
             "Введите город:",
-            reply_markup=get_city_keyboard()
+            # reply_markup=get_city_keyboard()
         )
         state.set(DeliveryAddressStates.waiting_for_city)
 

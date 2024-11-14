@@ -372,7 +372,7 @@ def accept_order(call: CallbackQuery, state: StateContext):
         bot.send_message(
             CHANNEL_CHAT_ID,
             f"🚚 Заказ #{order_id} принят в доставку\n"
-            f"Курьер: {user_info['name']} (@{user_info['username']})",
+            f"Курьер: {user_info['name']} ({user_info['username']})",
             reply_parameters=reply_params
         )
 

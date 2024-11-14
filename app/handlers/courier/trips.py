@@ -280,14 +280,16 @@ def get_avito_order_markup(order_id, track_numbers, current_order_selections):
     """Формирует клавиатуру для заказа Авито"""
     markup = types.InlineKeyboardMarkup(row_width=1)
 
-    for track_number in track_numbers.keys():
-        item_key = f"{track_number}|{order_id}"
+    for track_number, items in track_numbers.items():
+        # Собираем все order_item_id для данного трек-номера
+        order_item_ids = [str(item['order_item_id']) for item in items]
+        item_key = f"{track_number}|{order_id}|{','.join(order_item_ids)}"
         is_selected = item_key in current_order_selections
         prefix = "☑️" if is_selected else "⬜️"
 
         markup.add(types.InlineKeyboardButton(
             f"{prefix} Трек-номер: {track_number}",
-            callback_data=f"toggle_avito_item_{order_id}_{track_number}"
+            callback_data=f"toggle_avito_item_{order_id}_{','.join(order_item_ids)}_{track_number}"
         ))
 
     markup.add(
@@ -649,7 +651,7 @@ def process_avito_delivery_completion(username: str, chat_id: int, order_id: int
                 update_order_status(order_id, OrderType.CLOSED.value)
             else:
                 # Иначе ставим частичную доставку
-                update_order_status(order_id, OrderType.PARTLY_DELIVERED.value)
+                update_order_status(order_id, OrderType.PARTLY_DELIVERED.value, )
 
         # Получаем информацию о курьере
         courier_info = get_user_by_username(username, state)
@@ -661,7 +663,7 @@ def process_avito_delivery_completion(username: str, chat_id: int, order_id: int
             f"👤 Менеджер: @{order.get('manager_username', 'Не указан')}\n\n"
             "📋 Доставленные товары:\n"
             f"{chr(10).join(delivered_products)}\n\n"
-            f"🚚 Курьер: {courier_info['name']} (@{courier_info['username']})"
+            f"🚚 Курьер: {courier_info['name']} ({courier_info['username']})"
         )
 
         # Проверяем остались ли активные заказы в поездке
@@ -716,9 +718,10 @@ def toggle_avito_item_selection(call: CallbackQuery, state: StateContext):
     try:
         parts = call.data.split('_')
         order_id = parts[3]
-        track_number = parts[4]
+        order_item_ids = parts[4]
+        track_number = parts[5]
 
-        item_key = f"{track_number}|{order_id}"
+        item_key = f"{track_number}|{order_id}|{order_item_ids}"
 
         # Получаем информацию о заказе
         order = get_order_by_id(int(order_id), [OrderType.READY_TO_DELIVERY.value])
@@ -1184,6 +1187,7 @@ def back_to_orders_list(call: CallbackQuery, state: StateContext):
 
         # Создаем клавиатуру с учетом выбранных товаров
         markup = get_orders_keyboard(orders, selected_items)
+        markup.add(types.InlineKeyboardButton("🔙 Вернуться в меню", callback_data="back_to_courier_menu"))
 
         new_message = bot.edit_message_text(
             "Выберите заказы для добавления товаров в поездку:",
@@ -1191,6 +1195,7 @@ def back_to_orders_list(call: CallbackQuery, state: StateContext):
             message_to_edit,
             reply_markup=markup
         )
+
 
         # Очищаем состояния и сохраняем ID нового сообщения
         delete_multiple_states(state, [
@@ -1300,7 +1305,7 @@ def show_current_trip(call: CallbackQuery, state: StateContext):
         # Формируем сообщение
         trip_message = (
             "🚚 Текущая поездка\n\n"
-            f"Курьер: {courier_info['name']} (@{courier_info['username']})\n"
+            f"Курьер: {courier_info['name']} ({courier_info['username']})\n"
             f"Количество заказов: {len(set(item['order_id'] for item in filtered_items))}\n\n"
             "Заказы в поездке:\n"
         )
@@ -1701,7 +1706,13 @@ def confirm_orders_selection(call: CallbackQuery, state: StateContext):
                     if len(selected_tracks) == total_tracks:
                         update_order_status(order_id, OrderType.IN_DELIVERY.value)
                     else:
-                        update_order_status(order_id, OrderType.PARTLY_DELIVERED.value)
+                        update_order_status(order_id, OrderType.PARTLY_DELIVERED.value, with_order_items = False)
+                        for item_key in selected_items[order_id]:
+                            _, _ ,order_item_ids = item_key.split('|')
+                            # Обновляем статус для каждого order_item_id
+                            order_item_ids = order_item_ids.split(',')
+                            for order_item_id in order_item_ids:
+                                update_order_item_status(int(order_item_id), OrderType.IN_DELIVERY.value)
                 else:
                     if len(selected_items[order_id]) == len(order['products']['no_track']):
                         # Если выбраны все товары заказа
@@ -1717,7 +1728,7 @@ def confirm_orders_selection(call: CallbackQuery, state: StateContext):
         # Формируем сообщение о созданной поездке
         trip_message = (
             f"🚚 Создана новая поездка\n\n"
-            f"Курьер: {courier_info['name']} (@{courier_info['username']})\n"
+            f"Курьер: {courier_info['name']} ({courier_info['username']})\n"
             f"Количество заказов: {len(selected_items)}\n"
             # f"Стоимость доставки: {delivery_cost.total_price} руб.\n\n"
             f"Заказы в поездке:\n"
@@ -1745,7 +1756,7 @@ def confirm_orders_selection(call: CallbackQuery, state: StateContext):
                                 break
                     else:
                         # Для заказов Авито
-                        track_number, order_id = item_key.split('|')
+                        track_number, order_id,_ = item_key.split('|')
                         track_info = order_data['products'].get(track_number, {})
                         if track_info and 'products' in track_info:
                             trip_message += f"\n  📬 Трек-номер: {track_number}"
@@ -2342,7 +2353,7 @@ def process_delivery_completion(username: str, chat_id: int, delivery_note: str 
         if returned_products:
             delivery_message += "↩️ Возврат:\n" + "\n".join(returned_products) + "\n\n"
 
-        delivery_message += f"🚚 Курьер: {courier_info['name']} (@{courier_info['username']})"
+        delivery_message += f"🚚 Курьер: {courier_info['name']} ({courier_info['username']})"
 
         # Проверяем остались ли активные заказы в поездке
         active_trip = trip_manager.get_courier_active_trips(courier_info['id'])[0]

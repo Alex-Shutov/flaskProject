@@ -153,7 +153,7 @@ def get_packer_info(packer_id,state=None,username=None):
     if not packer_id:
         return "Упаковщик: Не назначен"
     packer = get_user_info(packer_id) if not state and not username else get_user_by_username(username,state)
-    return f"Упаковщик: {packer['name']} (@{packer['username']})"
+    return f"Упаковщик: {packer['name']} ({packer['username']})"
 
 
 def get_delivery_info(data):

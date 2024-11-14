@@ -49,6 +49,7 @@ from database import get_avito_photos
 from handlers.manager.delivery import finalize_delivery_order
 
 from app_types import OrderTypeRu
+import handlers.transfer
 
 bot = get_bot_instance()
 
@@ -89,7 +90,7 @@ def start(message,state:StateContext):
     if 'Admin' in user_access['roles']:
         set_admin_commands(bot,message)
     else:
-        general_command = [types.BotCommand("/restart", "Перезапустить бота")]
+        general_command = [types.BotCommand("/restart", "Перезапустить бота"),types.BotCommand("/transfer", "Передать заказ")]
         bot.set_my_commands(general_command,scope=types.BotCommandScopeChat(message.chat.id))
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(*available_buttons)
@@ -441,7 +442,7 @@ def handle_packed_order(call: types.CallbackQuery, state: StateContext):
 def confirm_final_order(call: types.CallbackQuery, state: StateContext):
     with state.data() as data:
         sale_type = data.get('sale_type')
-
+    bot.delete_message(call.message.chat.id, call.message.message_id)
     # В зависимости от типа заказа вызываем соответствующую финализирующую функцию
     if sale_type == "avito":
         finalize_avito_order(call.message.chat.id,call.message.message_id ,call.message.json['chat']['username'], state)

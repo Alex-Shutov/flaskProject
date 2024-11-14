@@ -255,8 +255,9 @@ def check_packing_requirements(chat_id, state: StateContext):
     """Проверяет требования к упаковке для заказа Авито"""
     with state.data() as data:
         product_dict = data.get('product_dict', {})
+        avito_dict = data.get('avito_photos_tracks', {})
         # Проверяем количество товаров
-        total_products = sum(len(params) for params in product_dict.values())
+        total_products = sum(len(params) for params in product_dict.values()) if data.get('sale_type') == 'delivery' else len(avito_dict.values())
         print(total_products, '123')
 
         # Если товар один, проверяем его тип

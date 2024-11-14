@@ -263,7 +263,8 @@ def set_admin_commands(bot,message):
         types.BotCommand("/manage_stock", "Управление стоком и ценами"),
         types.BotCommand("/reports", "Отчеты"),
         types.BotCommand("/settings", "Настройки"),
-        types.BotCommand("/restart", "Перезапустить бота")
+        types.BotCommand("/restart", "Перезапустить бота"),
+        types.BotCommand("/transfer", "Передать заказ")
     ]
     bot.set_my_commands(admin_commands,scope=types.BotCommandScopeChat(message.chat.id))
 
