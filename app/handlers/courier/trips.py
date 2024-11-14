@@ -187,7 +187,7 @@ def show_avito_order(call: CallbackQuery, state: StateContext):
             selected_items = data.get('selected_items', {})
             current_order_selections = selected_items.get(str(order_id), [])
             avito_order_shown = data.get('avito_order_shown', False)
-            orders_message_id = data.get('orders_message_id', call.message.message_id)
+            orders_message_id = call.message.message_id
 
         # Получаем список трек-номеров
         track_numbers = {}
@@ -492,7 +492,7 @@ def handle_invoice_photo(message: Message, state: StateContext):
             raise Exception("Failed to update invoice photo")
 
         # Переходим к завершению доставки
-        process_avito_delivery_completion(message.from_user.username, message.chat.id, order_id, track_number, state)
+        process_avito_delivery_completion(message.from_user.username, message.chat.id, order_id, track_number,photo_path, state)
 
     except Exception as e:
         print(f"Error in handle_invoice_photo: {e}")
@@ -586,7 +586,7 @@ def handle_cancel_avito_track(call: CallbackQuery, state: StateContext):
         bot.answer_callback_query(call.id, "Произошла ошибка при отмене трек-номера")
 
 
-def process_avito_delivery_completion(username: str, chat_id: int, order_id: int, track_number: str,
+def process_avito_delivery_completion(username: str, chat_id: int, order_id: int, track_number: str,invoice_path,
                                       state: StateContext):
     """
     Обработка успешной доставки трек-номера Авито
@@ -617,9 +617,10 @@ def process_avito_delivery_completion(username: str, chat_id: int, order_id: int
         for item in trip_items:
             product_name = item['product_name']
             param_title = item.get('param_title', '')
+            order_item_id = item.get('order_item_id', '')
             item_track = next(
                 (track for track, info in order['products'].items()
-                 if any(p['name'] == product_name and p.get('param') == param_title
+                 if any(p['name'] == product_name and p.get('param') == param_title and order_item_id == p.get('order_item_id')
                         for p in info.get('products', []))),
                 None
             )
@@ -660,7 +661,7 @@ def process_avito_delivery_completion(username: str, chat_id: int, order_id: int
         delivery_message = (
             f"✅ Трек-номер {track_number} доставлен\n"
             f"📦 Заказ #{str(order_id).zfill(4)}ㅤ\n"
-            f"👤 Менеджер: @{order.get('manager_username', 'Не указан')}\n\n"
+            f"👤 Менеджер: {order.get('manager_username', 'Не указан')}\n\n"
             "📋 Доставленные товары:\n"
             f"{chr(10).join(delivered_products)}\n\n"
             f"🚚 Курьер: {courier_info['name']} ({courier_info['username']})"
@@ -692,11 +693,13 @@ def process_avito_delivery_completion(username: str, chat_id: int, order_id: int
         )
 
         # Отправляем сообщение в канал
-        bot.send_message(
-            CHANNEL_CHAT_ID,
-            delivery_message,
-            reply_to_message_id=order.get('message_id')
-        )
+        # bot.send_message(
+        #     CHANNEL_CHAT_ID,
+        #     delivery_message,
+        #     reply_to_message_id=order.get('message_id')
+        # )
+        media_group = create_media_group([invoice_path], delivery_message)
+        bot.send_media_group(CHANNEL_CHAT_ID, media=media_group,reply_to_message_id=order.get('message_id'))
 
         # Очищаем состояния
         delete_multiple_states(state, [

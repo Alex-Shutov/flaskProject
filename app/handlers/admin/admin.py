@@ -840,7 +840,7 @@ def handle_report_type_selection(call: types.CallbackQuery, state: StateContext)
         return
 
     # Запрашиваем период для формирования отчета
-    bot.send_message(call.message.chat.id, "Введите период для отчета (например, 2023-01-01 2023-12-31):")
+    bot.send_message(call.message.chat.id, "Введите период для отчета в формате Год-Месяц-День \nНапример, 2023-01-01 2023-12-31:")
     state.set(ReportStates.report_period)
 
 @bot.message_handler(state=ReportStates.report_period)

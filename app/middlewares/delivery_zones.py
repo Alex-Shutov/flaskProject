@@ -282,7 +282,11 @@ class DeliveryCostCalculator:
                     if (not delivery_zone or
                             float(current_zone.base_price) > float(delivery_zone.base_price)):
                         delivery_zone = current_zone
-
+            delivery_orders = [
+                str(order['id'])
+                for order in orders_info
+                if order.get('type') == 'delivery' and str(order['id']) in selected_items
+            ]
             # Обработка заказов
             for order_info in orders_info:
                 order_id = str(order_info['id'])
@@ -290,8 +294,12 @@ class DeliveryCostCalculator:
                 if order_info.get('type') == 'delivery':
                     if delivery_zone:
                         # Расчет стоимости доставки для обычного заказа
+                        total_delivery_items = sum(
+                            len(selected_items.get(order_id, []))
+                            for order_id in delivery_orders
+                        )
                         base_price = float(delivery_zone.base_price)
-                        additional_items = len(selected_items.get(order_id, [])) - 1
+                        additional_items = total_delivery_items - 1
                         additional_price = max(0, additional_items * float(delivery_zone.additional_item_price))
                         total_price += base_price + additional_price
 
@@ -317,6 +325,7 @@ class DeliveryCostCalculator:
                                     JOIN products p ON oi.product_id = p.id
 
                                     WHERE oi.order_id = ANY(%s)
+                                    AND oi.status = 'ready_to_delivery'
 
                                 """
 
