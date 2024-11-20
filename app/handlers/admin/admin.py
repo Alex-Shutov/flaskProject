@@ -28,6 +28,8 @@ from database import soft_delete_product_param, soft_delete_product, soft_delete
 
 from database import get_all_suppliers
 
+from app.utils import is_valid_command
+
 
 #
 #
@@ -149,6 +151,8 @@ def handle_add_action(call: types.CallbackQuery, state: StateContext):
 
 @bot.message_handler(state=AdminStates.enter_product_param_title)
 def enter_product_param_title(message: types.Message, state: StateContext):
+    if not is_valid_command(message.text, state):
+        return
     title = message.text.strip()
 
     # Сохраняем title в состояние
@@ -182,6 +186,8 @@ def enter_product_param_title(message: types.Message, state: StateContext):
 
 @bot.message_handler(state=AdminStates.enter_product_param_values)
 def enter_product_param_values(message: types.Message, state: StateContext):
+    if not is_valid_command(message.text, state):
+        return
     param_values = message.text.split(',')
 
     with state.data() as data:
@@ -223,6 +229,8 @@ def enter_product_param_values(message: types.Message, state: StateContext):
 
 @bot.message_handler(state=AdminStates.enter_product_stock)
 def enter_product_stock(message: types.Message, state: StateContext):
+    if not is_valid_command(message.text, state):
+        return
     try:
         stock = int(message.text)
         if stock < 0:
@@ -368,6 +376,8 @@ def handle_view_command(call: types.CallbackQuery, state: StateContext):
 
 @bot.message_handler(state=AdminStates.enter_type_product_name)
 def enter_type_product_name(message: types.Message, state: StateContext):
+    if not is_valid_command(message.text, state):
+        return
     state.add_data(enter_type_product_name=message.text)
 
     # Создаем инлайн-клавиатуру с кнопкой "Пропустить"
@@ -391,6 +401,8 @@ def enter_type_product_name(message: types.Message, state: StateContext):
 # Обработка параметров типа продукта
 @bot.message_handler(state=AdminStates.enter_type_product_params)
 def enter_type_product_params(message: types.Message, state: StateContext):
+    if not is_valid_command(message.text, state):
+        return
     raw_params = message.text.split('\n')
     params = {}
 
@@ -641,6 +653,8 @@ def enter_product_name(message: types.Message, state: StateContext):
 
 @bot.message_handler(state=AdminStates.enter_sale_price)
 def enter_sale_price(message: types.Message, state: StateContext):
+    if not is_valid_command(message.text, state):
+        return
     try:
         sale_price = float(message.text.strip())
         if sale_price < 0:
@@ -658,6 +672,8 @@ def enter_sale_price(message: types.Message, state: StateContext):
 
 @bot.message_handler(state=AdminStates.enter_avito_price)
 def enter_avito_price(message: types.Message, state: StateContext):
+    if not is_valid_command(message.text, state):
+        return
     try:
         avito_price = float(message.text.strip())
         if avito_price < 0:
@@ -677,6 +693,8 @@ def enter_avito_price(message: types.Message, state: StateContext):
 
 @bot.message_handler(state=AdminStates.enter_product_params)
 def enter_product_params(message: types.Message, state: StateContext):
+    if not is_valid_command(message.text, state):
+        return
     # Получаем значения, введенные пользователем
     param_values = message.text.split(',')
 
@@ -746,6 +764,8 @@ def ask_is_main_product(chat_id):
 
 @bot.message_handler(state=AdminStates.enter_product_specific_params)
 def enter_product_specific_params(message: types.Message, state: StateContext):
+    if not is_valid_command(message.text, state):
+        return
     raw_params = message.text.split('\n')
     specific_params = {}
 
@@ -796,6 +816,7 @@ def enter_product_specific_params(message: types.Message, state: StateContext):
 
 @bot.callback_query_handler(func=lambda call: call.data == "skip_product_specific_params")
 def skip_product_specific_params(call: types.CallbackQuery, state: StateContext):
+
     with state.data() as data:
         product_name = data.get('product_name')
         product_params = data.get('product_params', {})
@@ -875,6 +896,7 @@ def format_type_product_values(values):
 
 @bot.message_handler(commands=['reports'])
 def report_selection(message: types.Message, state: StateContext):
+    
     type_products = get_all_type_products()
 
     if not type_products:
