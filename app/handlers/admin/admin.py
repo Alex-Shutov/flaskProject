@@ -28,7 +28,7 @@ from database import soft_delete_product_param, soft_delete_product, soft_delete
 
 from database import get_all_suppliers
 
-from app.utils import is_valid_command
+from utils import is_valid_command
 
 
 #
@@ -896,7 +896,7 @@ def format_type_product_values(values):
 
 @bot.message_handler(commands=['reports'])
 def report_selection(message: types.Message, state: StateContext):
-    
+
     type_products = get_all_type_products()
 
     if not type_products:
