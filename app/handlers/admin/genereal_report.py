@@ -19,6 +19,9 @@ from database import get_setting_value
 
 from app_types import TripStatusRu
 
+from app_types import TrackNumberStatusRu
+from database import get_packing_info
+
 
 def generate_detailed_sales_report(start_date, end_date, filename="detailed_sales_report.xlsx"):
     workbook = Workbook()
@@ -49,6 +52,8 @@ def generate_detailed_sales_report(start_date, end_date, filename="detailed_sale
         "Основной продукт",
         "Статус продукта",
         "Доставка/Трекинг",
+        "Статус упаковки",  # Новая колонка
+        "Причина переупаковки",  # Новая колонка
         "Статус заказа",
         "Менеджер",
         "Упаковщик",
@@ -143,6 +148,8 @@ def generate_detailed_sales_report(start_date, end_date, filename="detailed_sale
                 f"{main_products_in_order} осн.",
                 "",
                 get_delivery_info(order),
+                "",
+                "",
                 OrderTypeRu[order['status'].upper()].value,
                 f"{order['manager_name']} ({order['manager_username']})",
                 f"{order['packer_name']} ({order['packer_username']})" if order['packer_name'] else "",
@@ -172,6 +179,10 @@ def generate_detailed_sales_report(start_date, end_date, filename="detailed_sale
 
             # Строки с продуктами
             for item in items:
+                packing_status,repacking_reason="",""
+                if order['order_type']=='avito':
+                    tmp, repacking_reason = get_packing_info(order['id'],item.get('tracking_number'))
+                    packing_status = TrackNumberStatusRu[tmp.upper()].value
                 product_row = [
                     order['id'],
                     order['created_at'].strftime("%d.%m.%Y"),
@@ -181,6 +192,8 @@ def generate_detailed_sales_report(start_date, end_date, filename="detailed_sale
                     'Да' if item['is_main_product'] else 'Нет',
                     OrderTypeRu[item['status'].upper()].value,
                     get_delivery_info(order) if order['order_type'] == 'delivery' else item.get('tracking_number', ''),
+                    packing_status,
+                    repacking_reason,
                     OrderTypeRu[order['status'].upper()].value,  # Дублируем статус заказа
                     f"{order['manager_name']} ({order['manager_username']})",  # Дублируем менеджера
                     f"{order['packer_name']} ({order['packer_username']})" if order.get('packer_name') else "",
@@ -314,11 +327,11 @@ def get_correct_column_letter(column_name):
     """Получаем правильную букву колонки для каждого типа данных"""
     columns = {
         'main_products': 'F',      # Основные продукты
-        'manager_payment': 'O',    # Оплата менеджеру
-        'packer_payment': 'P',     # Оплата упаковщику
-        'sale_sum': 'Q',          # Сумма продажи
-        'delivery_sum': 'R',       # Сумма доставки
-        'total_sum': 'S'          # Итоговая сумма
+        'manager_payment': 'Q',    # Оплата менеджеру
+        'packer_payment': 'R',     # Оплата упаковщику
+        'sale_sum': 'S',          # Сумма продажи
+        'delivery_sum': 'T',       # Сумма доставки
+        'total_sum': 'U'          # Итоговая сумма
     }
     return columns.get(column_name)
 
@@ -343,13 +356,8 @@ def calculate_packing_cost(order):
     # Получаем базовую цену упаковки
     packing_price = get_setting_value('packing_price')
 
-    # Считаем количество трекномеров
-    tracking_numbers = set()
-    for item in order['items']:
-        if item.get('tracking_number'):
-            tracking_numbers.add(item['tracking_number'])
-
-    return len(tracking_numbers) * packing_price
+    # Используем количество упакованных коробок, а не количество трекномеров
+    return order.get('packed_boxes_count', 0) * packing_price
 
 
 def get_courier_info(order):
@@ -419,6 +427,7 @@ def get_detailed_order_data(start_date, end_date):
                 o.total_price,
                 o.delivery_address,
                 o.delivery_note,
+                o.packed_boxes_count,
                 m.name as manager_name,
                 m.username as manager_username,
                 p.name as packer_name,        -- Добавляем упаковщика
@@ -441,7 +450,7 @@ def get_detailed_order_data(start_date, end_date):
             WHERE o.created_at BETWEEN %s AND %s
             GROUP BY 
                 o.id, o.created_at, o.order_type, o.status, o.note,
-                o.total_price, o.delivery_address, o.delivery_note,
+                o.total_price, o.delivery_address, o.delivery_note, o.packed_boxes_count,
                 m.name, m.username, 
                 p.name, p.username,  -- Добавляем в GROUP BY
                 tp.title, oi.items_info,
@@ -463,15 +472,16 @@ def get_detailed_order_data(start_date, end_date):
                     'total_price': row[5],
                     'delivery_address': row[6],
                     'delivery_note': row[7],
-                    'manager_name': row[8],
-                    'manager_username': row[9],
-                    'packer_name': row[10],
-                    'packer_username': row[11],
-                    'type_product_name': row[12],
-                    'items': row[13] if isinstance(row[13], list) else [],
-                    'delivery_price': row[14] or row[17],  # Используем delivery_sum если нет delivery_price
-                    'courier_name': row[15],
-                    'courier_username': row[16]
+                    'packed_boxes_count':row[8],
+                    'manager_name': row[9],
+                    'manager_username': row[10],
+                    'packer_name': row[11],
+                    'packer_username': row[12],
+                    'type_product_name': row[13],
+                    'items': row[14] if isinstance(row[14], list) else [],
+                    'delivery_price': row[15] or row[18],  # Используем delivery_sum если нет delivery_price
+                    'courier_name': row[16],
+                    'courier_username': row[17]
                 }
                 results.append(order_dict)
 
@@ -482,47 +492,59 @@ def get_courier_trips_data(start_date, end_date):
     with get_connection() as conn:
         with conn.cursor() as cursor:
             query = """
-                  WITH trip_items_info AS (
-                      SELECT 
-                          ti.trip_id,
-                          oi.order_id,
-                          jsonb_agg(
-                              jsonb_build_object(
-                                  'order_id', o.id,
-                                  'delivery_address', o.delivery_address,
-                                  'tracking_number', oi.tracking_number,
-                                  'status', oi.status
-                              )
-                          ) as items_info
-                      FROM trip_items ti
-                      JOIN order_items oi ON ti.order_item_id = oi.id
-                      JOIN orders o ON oi.order_id = o.id
-                      GROUP BY ti.trip_id, oi.order_id
-                  )
-                  SELECT 
-                      ct.id,
-                      ct.status,
-                      ct.total_price,
-                      ct.created_at,
-                      ct.completed_at,
-                      u.name as courier_name,
-                      u.username as courier_username,
-                      dz.name as zone_name,
-                      dz.base_price,
-                      dz.additional_item_price,
-                      o.order_type,
-                      tii.items_info,
-                      o.delivery_note as courier_note
-                  FROM courier_trips ct
-                  JOIN users u ON ct.courier_id = u.id
-                  LEFT JOIN delivery_zones dz ON ct.zone_id = dz.id
-                  JOIN trip_items_info tii ON ct.id = tii.trip_id
-                  JOIN orders o ON tii.order_id = o.id
-                  WHERE ct.created_at BETWEEN %s AND %s
-                  ORDER BY ct.created_at DESC
-              """
+                WITH trip_items_info AS (
+                    SELECT 
+                        ti.trip_id,
+                        jsonb_agg(
+                            jsonb_build_object(
+                                'order_id', o.id,
+                                'delivery_address', o.delivery_address,
+                                'tracking_number', oi.tracking_number,
+                                'status', oi.status,
+                                'order_type', o.order_type
+                            )
+                        ) as items_info,
+                        MAX(o.order_type) as order_type -- Получаем тип доставки для поездки
+                    FROM trip_items ti
+                    JOIN order_items oi ON ti.order_item_id = oi.id
+                    JOIN orders o ON oi.order_id = o.id
+                    GROUP BY ti.trip_id
+                )
+                SELECT 
+                    ct.id AS trip_id,
+                    ct.status AS trip_status,
+                    ct.total_price,
+                    ct.created_at,
+                    ct.completed_at,
+                    u.name as courier_name,
+                    u.username as courier_username,
+                    dz.name as zone_name,
+                    dz.base_price,
+                    dz.additional_item_price,
+                    tii.order_type, -- Тип доставки (Avito или Доставка)
+                    tii.items_info,
+                    MAX(o.delivery_note) as courier_note
+                FROM courier_trips ct
+                JOIN users u ON ct.courier_id = u.id
+                LEFT JOIN delivery_zones dz ON ct.zone_id = dz.id
+                JOIN trip_items_info tii ON ct.id = tii.trip_id
+                LEFT JOIN LATERAL (
+                    SELECT o.delivery_note
+                    FROM orders o
+                    WHERE o.id = ANY(ARRAY(
+                        SELECT (jsonb_array_elements(tii.items_info)->>'order_id')::int
+                    ))
+                ) o ON true
+                WHERE ct.created_at BETWEEN %s AND %s
+                GROUP BY 
+                    ct.id, ct.status, ct.total_price, ct.created_at, ct.completed_at,
+                    u.name, u.username, dz.name, dz.base_price, dz.additional_item_price, tii.items_info, tii.order_type
+                ORDER BY ct.created_at DESC
+            """
             cursor.execute(query, (start_date, end_date))
             return cursor.fetchall()
+
+
 
 
 def generate_courier_trips_report(workbook, start_date, end_date):
@@ -573,7 +595,7 @@ def generate_courier_trips_report(workbook, start_date, end_date):
         # Основная строка поездки
         trip_row = [
             trip_id,
-            SaleTypeRu[order_type.upper()].value,
+            "",
             f"{courier_name} ({courier_username})",
             "",
             "",
@@ -604,14 +626,15 @@ def generate_courier_trips_report(workbook, start_date, end_date):
 
         # Строки с товарами
         for item in items_info:
+            item_order_type = item['order_type'].lower()
             item_row = [
                 trip_id,
-                SaleTypeRu[order_type.upper()].value,
+                SaleTypeRu[item_order_type.upper()].value,
                 f"{courier_name} ({courier_username})",
-                item['delivery_address'] if order_type == 'delivery' else item['tracking_number'],
-                zone_name if order_type == 'delivery' else "",
-                base_price if order_type == 'delivery' else "",
-                additional_price if order_type == 'delivery' else "",
+                item['delivery_address'] if item_order_type == 'delivery' else item['tracking_number'],
+                zone_name if item_order_type == 'delivery' else "",
+                base_price if item_order_type == 'delivery' else "",
+                additional_price if item_order_type == 'delivery' else "",
                 OrderTypeRu[item['status'].upper()].value,
                 TripStatusRu[status.upper()].value,
                 "",

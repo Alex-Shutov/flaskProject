@@ -4,6 +4,7 @@ import threading
 import uuid
 from io import BytesIO
 
+import telebot
 from telebot import types
 from bot import get_bot_instance
 from states import AvitoStates as SaleStates,DirectStates,CourierStates
@@ -37,6 +38,11 @@ from utils import create_media_group
 from handlers.handlers import process_product_stock
 
 from handlers.handlers import delete_multiple_states
+
+from database import get_connection
+
+from database import get_order_by_id
+from handlers.handlers import get_user_by_username
 
 bot = get_bot_instance()
 
@@ -287,7 +293,7 @@ def finalize_avito_order(chat_id, message_id, manager_username, state: StateCont
             avito_products = order_data.get("avito_products", {})
             gift = order_data.get("gift")
             note = order_data.get("note")
-            is_need_packing = order_data.get("is_need_packing")
+            is_need_packing = order_data.get("is_need_packing", False)
             sale_type = "avito"
             avito_photos_tracks = order_data.get("avito_photos_tracks", {})
             packer_id = order_data.get("pack_id")
@@ -327,16 +333,11 @@ def finalize_avito_order(chat_id, message_id, manager_username, state: StateCont
 
 
                 # Формируем сообщение с информацией о заказе
-                if packer_id == manager_id:
-                    pack_message = f"Упакует {manager_name} ({manager_username})"
-                elif not packer_id and is_need_packing:
-                    pack_message = "Упаковщик ещё не выбран"
-                else:
-                    pack_message = "Не требует упаковки"
-
+                # pack_message = "Требует упаковки" if is_need_packing else "Не требует упаковки"
+                pack_message=""
                 order_message = format_order_message(
                     order_id, product_list, gift, note, sale_type, manager_name, manager_username,
-                    total_price=total_price, avito_boxes=len(avito_photos_tracks.keys())
+                    total_price=total_price, avito_boxes=len(avito_photos_tracks.keys()), hide_track_prices=True
                 ) + f"\n\n{pack_message}"
 
                 # Отправляем сообщения с фото в основной канал
@@ -347,33 +348,22 @@ def finalize_avito_order(chat_id, message_id, manager_username, state: StateCont
                 #         reply_message_ids.append(reply_message_id)
                 #         update_order_message_id(order_id, reply_message_id)
                 # Отправляем фотографии в основной канал без сообщения о заказе
-                media_group = create_media_group(avito_photos_tracks.keys(),order_message)
+                media_group = create_media_group(avito_photos_tracks.keys(), order_message)
                 reply_message_id = bot.send_media_group(chat_id=CHANNEL_CHAT_ID, media=media_group)
-                bot.send_message(chat_id, order_message)
-                update_order_message_id(order['id'],reply_message_id[0].message_id)
+                # bot.send_message(chat_id, order_message)
+                update_order_message_id(order['id'], reply_message_id[0].message_id)
                 # state.set(SaleStates.avito_message)
                 state.add_data(order_id=order_id)
                 state.add_data(avito_message=order_message)
                 state.add_data(reply_message_id=reply_message_id[0].message_id)
                 # Уведомляем соответствующих пользователей
-                if not packer_id and is_need_packing:
-                    # Если упаковщик не выбран, оповещаем всех пользователей
-                    notify_all_users(order_message, order_id, reply_message_id[0].message_id, state)
-                elif packer_id and is_need_packing:
-                    markup = types.InlineKeyboardMarkup()
-                    update_order_status(order_id, OrderType.IN_PACKING.value)
-                    markup.add(types.InlineKeyboardButton(
-                        "📦 Упаковать товар !!!",
-                        callback_data=f"pack_goods_{order['id']}_{reply_message_id[0].message_id}"
-                    ))
-                    bot.send_message(chat_id,
-                                     "Если вы хотите упаковать этот заказ, нажмите на кнопку ниже:",
-                                     reply_markup=markup)
-
-                else:
-                    # Уведомляем курьеров сразу после обновления состояния
-                    notify_couriers(order_message, state,  avito_photos = avito_photos_tracks.keys(), reply_message_id=reply_message_id[0].message_id,)
-
+                # if is_need_packing:
+                    # Если нужна упаковка, отправляем всем упаковщикам
+                notify_all_users(order_message, order_id, reply_message_id[0].message_id, state)
+                # else:
+                #     # Если упаковка не нужна, сразу уведомляем курьеров
+                #     notify_couriers(order_message, state, avito_photos=avito_photos_tracks.keys(),
+                #                     reply_message_id=reply_message_id[0].message_id)
                 # Уменьшаем сток для всех продуктов
                 # for product_id, param_ids in product_dict.items():
                 #     for param_id in set(param_ids):
@@ -397,58 +387,75 @@ def notify_all_users(order_message, order_id,message_to_reply,state):
     for user in users:
         bot.send_message(user['telegram_id'], order_message, reply_markup=markup)
 
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pack_order_'))
-def handle_pack_order(call: types.CallbackQuery):
+def handle_pack_order(call: types.CallbackQuery, state: StateContext):
     order_id = call.data.split('_')[2]
     message_to_reply = call.data.split('_')[3]
-    user_info = get_user_info(call.from_user.username)
-    #TODo если упаковщик выбран - блокируем его изменние
-    if user_info:
-        current_packer = update_order_packer(order_id, user_info['id'])
-        if current_packer:
-            # Заказ уже взят другим упаковщиком
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("Активные заказы для упаковки", callback_data="orders_pack_goods"))
 
-            text = (f"Данный заказ уже упаковывает {current_packer['name']} ({current_packer['username']})\n"
-                    f"Вы можете посмотреть другие активные заказы")
-            if call.message.photo:
-                # Меняем описание под фото
-                bot.edit_message_caption(
-                    caption=text,
-                    message_id=call.message.message_id,
-                    chat_id=call.message.chat.id
+    # Получаем информацию о текущем пользователе
+    user_info = get_user_by_username(call.from_user.username, state)
+    if not user_info:
+        bot.answer_callback_query(call.id, "Ошибка: не удалось получить информацию о пользователе")
+        return
 
-                )
-            else:
-                # Меняем текст сообщения
+    # Получаем заказ
+    order = get_order_by_id(order_id)
+    if not order:
+        bot.answer_callback_query(call.id, "Заказ не найден")
+        return
+
+    # Проверяем, не назначен ли уже упаковщик
+    if order.get('packer_id'):
+        bot.answer_callback_query(call.id, "Заказ уже взят в упаковку другим упаковщиком")
+        return
+
+    # Обновляем packer_id и статус
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                UPDATE orders 
+                SET packer_id = %s,
+                    status = 'in_packing'::status_order
+                WHERE id = %s AND packer_id IS NULL
+                RETURNING id
+            """, [user_info['id'], order_id])
+
+            if cursor.fetchone():
+                # Отправляем уведомление в канал
+                try:
+                    reply_params = ReplyParameters(message_id=int(order.get('message_id')))
+                    bot.send_message(
+                        CHANNEL_CHAT_ID,
+                        f"Заказ #{str(order_id).zfill(4)}ㅤ взят в упаковку\n"
+                        f"Упаковщик: {user_info['name']} (@{user_info['username']})",
+                        reply_parameters=reply_params
+                    )
+                    state.add_data(message_to_reply=int(order.get('message_id')))
+                except telebot.apihelper.ApiTelegramException as e:
+                    if e.error_code == 400 and "message to be replied not found" in e.description:
+                        # Если сообщение не найдено, отправляем без reply
+                        mess = bot.send_message(
+                            CHANNEL_CHAT_ID,
+                            f"Заказ #{str(order_id).zfill(4)}ㅤ взят в упаковку\n"
+                            f"Упаковщик: {user_info['name']} (@{user_info['username']})",
+                        )
+                        state.add_data(message_to_reply=mess.message_id)
+
+                # Показываем кнопку для перехода к обработке трек-номеров
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton(
+                    "📦 Обработать трек-номера",
+                    callback_data=f"pack_goods_{order_id}_{int(order.get('message_id'))}"
+                ))
+
                 bot.edit_message_text(
-                    text,
-                    message_id=call.message.message_id,
-                    chat_id=call.message.chat.id,
+                    f"Вы взяли заказ #{str(order_id).zfill(4)} в упаковку\n"
+                    "Нажмите кнопку ниже для обработки трек-номеров",
+                    call.message.chat.id,
+                    call.message.message_id,
                     reply_markup=markup
                 )
-        else:
-            update_order_status(order_id, OrderType.IN_PACKING.value)
-            markup = types.InlineKeyboardMarkup()
-
-            markup.add(types.InlineKeyboardButton("📦 Упаковать товар !!!",
-                    callback_data=f"pack_goods_{order_id}_{message_to_reply}"))
-
-            bot.edit_message_reply_markup(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                reply_markup=markup
-            )
-
-
-            reply_params = ReplyParameters(message_id=int(message_to_reply))
-
-            bot.send_message(
-                CHANNEL_CHAT_ID,
-                f"Заказ #{str(order_id).zfill(4)}ㅤ \nПринят в упаковку \nУпакует {user_info['name']} ({user_info['username']})",
-                reply_parameters=reply_params,
-            )
-    else:
-        bot.send_message(call.message.chat.id, "Не удалось получить информацию о пользователе.")
-    bot.answer_callback_query(call.id)
+            else:
+                bot.answer_callback_query(call.id, "Не удалось взять заказ в упаковку")
+                return

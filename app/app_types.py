@@ -45,6 +45,18 @@ class TripStatusRu(Enum):
     IN_PROGRESS = 'В процессе'
     COMPLETED = 'Завершена'
     CANCELLED = 'Отменена'
+class TrackNumberStatus(Enum):
+    PENDING = 'pending'
+    IN_PACKING = 'in_packing'
+    CLOSED = 'closed'
+    SKIPPED = 'skipped'
+    REPACKED = 'repacked'
+class TrackNumberStatusRu(Enum):
+    PENDING = 'Не обработан'
+    IN_PACKING = 'В процессе'
+    CLOSED = 'Закрыт'
+    SKIPPED = 'Пропущен'
+    REPACKED='Переупакован'
 
 
 

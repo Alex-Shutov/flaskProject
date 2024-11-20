@@ -42,7 +42,7 @@ def get_user_by_username(username, state, user_id=None):
 
 
 
-def review_order_data(chat_id, state: StateContext):
+def review_order_data(chat_id, state: StateContext,prev_message=None):
     """
     Формирует и отображает сводку заказа перед финальным подтверждением
     """
@@ -89,7 +89,7 @@ def review_order_data(chat_id, state: StateContext):
                 order_summary.append(f"\n🔹 Трек-номер: {track_number}\n")
                 for product in track_info['products']:
                     order_summary.append(f"  • {product['name']} - {product['param']}")
-                    order_summary.append(f"{track_info['price']} руб.")
+                    # order_summary.append(f"{track_info['price']} руб.")
             order_summary.append(f"\n💰 Общая сумма заказа: {total} руб.")
         else:
             order_summary.append("\n🛒 Продукты:")

@@ -1,3 +1,4 @@
+import telebot
 from telebot import types
 from bot import get_bot_instance
 from database import check_user_access
@@ -50,6 +51,16 @@ from handlers.manager.delivery import finalize_delivery_order
 
 from app_types import OrderTypeRu
 import handlers.transfer
+
+from database import check_order_packing
+
+from database import get_connection
+
+from database import handle_pack_tracking
+
+from database import get_order_packing_status
+
+from database import update_order_packing_stats
 
 bot = get_bot_instance()
 
@@ -248,10 +259,9 @@ def show_packed_orders(call: types.CallbackQuery, state: StateContext):
             continue
 
 
-@bot.callback_query_handler(func=lambda call: call.data == 'orders_pack_goods', state=AppStates.picked_action)
+@bot.callback_query_handler(func=lambda call: call.data == 'orders_pack_goods')
 def show_active_orders_without_packer(call: types.CallbackQuery, state: StateContext):
     orders = get_active_orders_without_packer()
-    user_info = get_user_by_username(call.from_user.username, state)
 
     if not orders:
         bot.send_message(call.message.chat.id, "Нет активных заказов без упаковщика.")
@@ -259,11 +269,13 @@ def show_active_orders_without_packer(call: types.CallbackQuery, state: StateCon
 
     for order in orders:
         try:
+            # Проверяем необходимость упаковки
+            # needs_packing, reason = check_order_packing(order['id'])
+
             order_message = format_order_message(
                 order_id=order['id'],
-                product_list=order['products'].get('no_track', []).get('products') if order[
-                                                                                          'order_type'] != 'avito' else
-                order['products'],
+                product_list=order['products'].get('no_track', []).get('products')
+                if order['order_type'] != 'avito' else order['products'],
                 gift=order['gift'],
                 note=order['note'],
                 sale_type=order['order_type'],
@@ -273,7 +285,20 @@ def show_active_orders_without_packer(call: types.CallbackQuery, state: StateCon
                 avito_boxes=order['avito_boxes'] if order['order_type'] == 'avito' else None
             )
 
-            order_message += '\n\n❗️ Без упаковщика'
+            # Добавляем информацию об упаковке
+            # if needs_packing:
+            #     packing_info = "⚠️ Обязательная упаковка всех трек-номеров"
+            # else:
+            #     packing_info = "📦 Необходима проверка упаковки трек-номеров"
+            #
+            # order_message += f"\n\n{packing_info}\n{reason}"
+
+            # Получаем статус упаковки
+            all_processed, stats = get_order_packing_status(order['id'])
+            if stats:
+                order_message += f"\n\nСтатус упаковки:\n" \
+                                 f"Обработано трек-номеров: {stats['packed'] + stats['skipped']}/{stats['total']}"
+
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(
                 "📦 Взять в упаковку",
@@ -283,12 +308,140 @@ def show_active_orders_without_packer(call: types.CallbackQuery, state: StateCon
             bot.send_message(
                 call.message.chat.id,
                 order_message,
-                reply_markup=markup,
-                parse_mode='HTML'
+                reply_markup=markup
             )
+
         except Exception as e:
             print(f"Error processing order {order['id']}: {str(e)}")
             continue
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('pack_goods_'))
+def handle_pack_goods(call: types.CallbackQuery, state: StateContext,reply_message=None):
+    order_id = call.data.split('_')[2]
+    message_to_reply = reply_message if reply_message!='None' else call.data.split('_')[3]
+
+    # Получаем заказ
+    order = get_order_by_id(order_id)
+    if not order:
+        bot.answer_callback_query(call.id, "Заказ не найден")
+        return
+
+    # Получаем информацию о текущем пользователе
+    user_info = get_user_by_username(call.from_user.username, state)
+    if not user_info:
+        bot.answer_callback_query(call.id, "Ошибка: не удалось получить информацию о пользователе")
+        return
+
+    # Проверяем, не назначен ли уже упаковщик
+    if not order['packer_id']:
+        # Обновляем packer_id только если он еще не установлен
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    UPDATE orders 
+                    SET packer_id = %s,
+                        status = 'in_packing'::status_order
+                    WHERE id = %s AND packer_id IS NULL
+                    RETURNING id
+                """, [user_info['id'], order_id])
+            try:
+                if cursor.fetchone():
+                    # Отправляем уведомление в канал только при первом назначении упаковщика
+                    reply_params = ReplyParameters(message_id=int(order.get('message_id')))
+                    bot.send_message(
+                        CHANNEL_CHAT_ID,
+                        f"Заказ #{str(order_id).zfill(4)}ㅤ взят в упаковку\n"
+                        f"Упаковщик: {user_info['name']} (@{user_info['username']})",
+                        reply_parameters=reply_params
+                    )
+            except telebot.apihelper.ApiTelegramException as e:
+                if e.error_code == 400 and "message to be replied not found" in e.description:
+                    # Если сообщение не найдено, отправляем без reply
+                    bot.send_message(
+                        CHANNEL_CHAT_ID,
+                        f"Заказ #{str(order_id).zfill(4)}ㅤ взят в упаковку\n"
+                        f"Упаковщик: {user_info['name']} (@{user_info['username']})",
+                    )
+            
+
+    # Создаем клавиатуру для каждого трек-номера
+    markup = types.InlineKeyboardMarkup(row_width=1)
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            for tracking_number in order['products'].keys():
+                cursor.execute("""
+                    SELECT packing_status, 
+                           CASE 
+                               WHEN EXISTS (
+                                   SELECT 1 
+                                   FROM order_items oi 
+                                   JOIN products p ON oi.product_id = p.id 
+                                   JOIN suppliers s ON p.supplier_id = s.id
+                                   WHERE oi.order_id = %s 
+                                   AND oi.tracking_number = %s 
+                                   AND s.country = 'russia'
+                               ) THEN true 
+                               ELSE false 
+                           END as needs_packing
+                    FROM avito_photos
+                    WHERE order_id = %s AND tracking_number = %s
+                """, [order_id, tracking_number, order_id, tracking_number])
+
+                result = cursor.fetchone()
+
+                if result:
+                    packing_status, needs_packing = result
+                    # Показываем кнопку если статус pending или in_packing
+                    if packing_status in ('pending', 'in_packing'):
+                        btn_text = f"{'⚠️' if needs_packing else '📦'} {tracking_number}"
+                        products_info = []
+                        # Добавляем информацию о продуктах в трек-номере
+                        for product in order['products'][tracking_number]['products']:
+                            products_info.append(f"[{product['name']}] [{product['param']}]")
+                        products_str = "\n".join(products_info)
+
+                        markup.add(types.InlineKeyboardButton(
+                            btn_text,
+                            callback_data=f"pack_tracking_{order_id}_{tracking_number}_{int(order.get('message_id'))}"
+                        ))
+
+            # Получаем статистику обработки
+            cursor.execute("""
+                   SELECT 
+                       COUNT(*) as total,
+                       COUNT(*) FILTER (WHERE packing_status = 'closed') as packed,
+                       COUNT(*) FILTER (WHERE packing_status = 'skipped') as skipped
+                   FROM avito_photos
+                   WHERE order_id = %s
+               """, [order_id])
+            stats = cursor.fetchone()
+    if len(markup.keyboard) > 0:
+
+        status_text = (
+            f"📊 Статистика обработки:\n"
+            f"Всего трек-номеров: {stats[0]}\n"
+            f"Упаковано: {stats[1]}\n"
+            f"Пропущено: {stats[2]}\n\n"
+            f"Выберите трек-номер для проверки:\n"
+            f"⚠️ - российский товар (обязательная упаковка)\n"
+            f"📦 - китайский товар (требует проверки)"
+        )
+
+        bot.edit_message_text(
+            status_text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+    else:
+        bot.edit_message_text(
+            "Все трек-номера обработаны\n\n",
+            call.message.chat.id,
+            call.message.message_id
+        )
+
 
 @bot.callback_query_handler(func=lambda call: call.data == 'orders_in_packing')
 def show_packing_orders(call: types.CallbackQuery, state: StateContext):
@@ -359,17 +512,128 @@ def show_packing_orders(call: types.CallbackQuery, state: StateContext):
 
     state.set(AppStates.picked_action)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('pack_goods_'))
-def handle_pack_goods(call: types.CallbackQuery):
-    order_id = call.data.split('_')[2]
-    message_to_reply = call.data.split('_')[3]
+# @bot.callback_query_handler(func=lambda call: call.data.startswith('pack_goods_'))
+# def handle_pack_goods(call: types.CallbackQuery):
+#     # order_id = call.data.split('_')[2]
+#     # message_to_reply = call.data.split('_')[3]
+#     #
+#     # # Сообщение с проверкой комплектации
+#     # markup = types.InlineKeyboardMarkup()
+#     # markup.add(types.InlineKeyboardButton("Упаковал", callback_data=f"packed_{order_id}_{message_to_reply}"))
+#     #
+#     # bot.edit_message_text( "Проверьте, что вы положили:\n1. Подставка с 3 болтами\n2. Ярусы елки\n3. Подарок\n4. Допники", call.message.chat.id, call.message.message_id, reply_markup=markup)
+#     @bot.callback_query_handler(func=lambda call: call.data.startswith('pack_goods_'))
+# def handle_pack_goods(call: types.CallbackQuery, state: StateContext):
+#     order_id = call.data.split('_')[2]
+#
+#     # Получаем заказ
+#     order = get_order_by_id(order_id)
+#     if not order:
+#         bot.answer_callback_query(call.id, "Заказ не найден")
+#         return
+#
+#     # Создаем клавиатуру для каждого трек-номера
+#     markup = types.InlineKeyboardMarkup(row_width=1)
+#
+#     for tracking_number in order['products'].keys():
+#         # Проверяем статус упаковки
+#         with get_connection() as conn:
+#             with conn.cursor() as cursor:
+#                 cursor.execute("""
+#                     SELECT needs_packing, is_packed
+#                     FROM tracking_package_status
+#                     WHERE order_id = %s AND tracking_number = %s
+#                 """, [order_id, tracking_number])
+#                 status = cursor.fetchone()
+#
+#                 if status:
+#                     needs_packing, is_packed = status
+#                     if not is_packed:  # Показываем только неупакованные трек-номера
+#                         btn_text = f"{'⚠️' if needs_packing else '📦'} Трек-номер: {tracking_number}"
+#                         markup.add(types.InlineKeyboardButton(
+#                             btn_text,
+#                             callback_data=f"pack_tracking_{order_id}_{tracking_number}"
+#                         ))
+#     #
+#     # if len(markup.keyboard) > 0:
+#     #     markup.add(types.InlineKeyboardButton(
+#     #         "✅ Завершить упаковку",
+#     #         callback_data=f"finish_packing_{order_id}"
+#     #     ))
+#
+#         bot.edit_message_text(
+#             "Выберите трек-номер для упаковки:\n"
+#             "⚠️ - обязательная упаковка\n"
+#             "📦 - требует проверки",
+#             call.message.chat.id,
+#             call.message.message_id,
+#             reply_markup=markup
+#         )
+#     else:
+#         bot.edit_message_text(
+#             "Все трек-номера обработаны",
+#             call.message.chat.id,
+#             call.message.message_id
+#         )
+#         # handle_packing_completion(order_id, message_to_reply, call.message.chat.id)
 
-    # Сообщение с проверкой комплектации
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("Упаковал", callback_data=f"packed_{order_id}_{message_to_reply}"))
 
-    bot.edit_message_text( "Проверьте, что вы положили:\n1. Подставка с 3 болтами\n2. Ярусы елки\n3. Подарок\n4. Допники", call.message.chat.id, call.message.message_id, reply_markup=markup)
+def handle_packing_completion(order_id: int, message_to_reply: str, chat_id: int):
+    """Обработка завершения упаковки всего заказа"""
+    try:
+        order = get_order_by_id(order_id)
+        if not order:
+            raise ValueError("Заказ не найден")
 
+        # Проверяем все ли трек-номера обработаны
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT COUNT(*) as total_boxes,
+                           COUNT(*) FILTER (WHERE is_packed = true) as packed_boxes
+                    FROM tracking_package_status
+                    WHERE order_id = %s
+                """, [order_id])
+                counts = cursor.fetchone()
+                if not counts or counts[0] != counts[1]:
+                    raise ValueError("Не все трек-номера обработаны")
+
+                # Обновляем статус заказа
+                cursor.execute("""
+                    UPDATE orders 
+                    SET status = 'ready_to_delivery'::status_order,
+                        packed_boxes_count = %s
+                    WHERE id = %s
+                """, [counts[1], order_id])
+
+        # Формируем сообщение
+        order_message = format_order_message(
+            order_id=order['id'],
+            product_list=order['products'],
+            gift=order['gift'],
+            note=order['note'],
+            sale_type=order['order_type'],
+            manager_name=order['manager_name'],
+            manager_username=order['manager_username'],
+            total_price=order['total_price'],
+            avito_boxes=counts[1],  # Используем фактическое количество упакованных коробок
+            hide_track_prices=True
+        )
+
+        # Получаем фотографии для Авито
+        photos = get_avito_photos(order_id) if order['order_type'] == 'avito' else None
+
+        # Уведомляем курьеров
+        notify_couriers(order_message, None, avito_photos=photos, reply_message_id=message_to_reply)
+
+        bot.send_message(
+            chat_id,
+            f"✅ Заказ #{str(order_id).zfill(4)} успешно упакован\n"
+            f"Упаковано коробок: {counts[1]}"
+        )
+
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Ошибка при завершении упаковки: {str(e)}")
 @bot.callback_query_handler(func=lambda call: call.data.startswith('packed_'))
 def handle_packed_order(call: types.CallbackQuery, state: StateContext):
    """
@@ -409,13 +673,20 @@ def handle_packed_order(call: types.CallbackQuery, state: StateContext):
        )
 
        # Отправляем уведомление в основной чат
-       reply_params = ReplyParameters(message_id=int(message_to_reply))
-       bot.send_message(
-           CHANNEL_CHAT_ID,
-           f"Заказ #{str(order_id).zfill(4)}ㅤ \nУпакован\n"
-           f"Упаковал: {user_info['name']} ({user_info['username']})",
-           reply_parameters=reply_params
-       )
+       try:
+           reply_params = ReplyParameters(message_id=int(message_to_reply))
+           bot.send_message(
+               CHANNEL_CHAT_ID,
+               f"Заказ #{str(order_id).zfill(4)}ㅤ \nУпакован\n"
+               f"Упаковал: {user_info['name']} ({user_info['username']})",
+               reply_parameters=reply_params)
+       except telebot.apihelper.ApiTelegramException as e:
+           if e.error_code == 400 and "message to be replied not found" in e.description:
+               bot.send_message(
+                   CHANNEL_CHAT_ID,
+                   f"Заказ #{str(order_id).zfill(4)}ㅤ \nУпакован\n"
+                   f"Упаковал: {user_info['name']} ({user_info['username']})",
+               )
 
        # Обновляем сообщение упаковщику
        bot.edit_message_text(
@@ -442,6 +713,448 @@ def handle_packed_order(call: types.CallbackQuery, state: StateContext):
    except Exception as e:
        print(f"Error in handle_packed_order: {str(e)}")
        bot.answer_callback_query(call.id, "❌ Произошла ошибка при обработке заказа")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('pack_tracking_'))
+def handle_tracking_packing(call: types.CallbackQuery):
+    """Обработчик выбора трек-номера для упаковки"""
+    _,_, order_id, tracking_number,message_to_reply = call.data.split('_')
+
+    order = get_order_by_id(order_id)
+    if not order or tracking_number not in order['products']:
+        bot.answer_callback_query(call.id, "Ошибка: заказ или трек-номер не найден")
+        return
+
+    track_products = []
+    for product in order['products'][tracking_number]['products']:
+        track_products.append(f"{product['name']} {product['param']}")
+    products_info = "\n".join(track_products)
+
+    # Проверяем статус трек-номера
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                    UPDATE avito_photos 
+                    SET packing_status = 'in_packing'
+                    WHERE order_id = %s AND tracking_number = %s
+                    RETURNING 1
+                """, [order_id, tracking_number])
+
+            # Проверяем наличие обязательной упаковки
+            needs_packing, _ = check_order_packing(order_id,tracking_number=tracking_number)
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    if needs_packing:
+        # Если упаковка обязательна, показываем только кнопку подтверждения
+        markup.add(types.InlineKeyboardButton(
+            "✅ Подтвердить упаковку",
+            callback_data=f"confirm_pack_{order_id}_{tracking_number}_{int(order.get('message_id'))}"
+        ))
+        message = "⚠️ Требуется обязательная упаковка"
+    else:
+        # Если упаковка необязательна, даем выбор
+        markup.add(
+            types.InlineKeyboardButton(
+                "🔄 Переупаковать",
+                callback_data=f"repack_pack_{order_id}_{tracking_number}_{int(order.get('message_id'))}"
+            ),
+            types.InlineKeyboardButton(
+                "✅ Пропустить упаковку",
+                callback_data=f"skip_pack_{order_id}_{tracking_number}_{int(order.get('message_id'))}"
+            )
+        )
+        message = "📦 Проверьте необходимость упаковки"
+
+    full_message = (
+        f"Трек-номер: {tracking_number}\n"
+        f"Продукты в трекномере:\n{products_info}\n\n"
+        f"{message}"
+    )
+
+    markup.add(types.InlineKeyboardButton(
+        "🔙 Вернуться к списку",
+        callback_data=f"pack_goods_{order_id}_{message_to_reply}"
+    ))
+
+    bot.edit_message_text(
+        full_message,
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_pack_'))
+def confirm_tracking_packing(call: types.CallbackQuery, state: StateContext):
+    """Обработчик подтверждения упаковки трек-номера"""
+    _,_, order_id, tracking_number,message_reply = call.data.split('_')
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                  UPDATE avito_photos 
+                  SET packing_status = 'closed'
+                  WHERE order_id = %s AND tracking_number = %s
+              """, [order_id, tracking_number])
+
+    # Обновляем статистику упаковки
+    update_order_packing_stats(order_id)
+
+    # Проверяем, все ли трек-номера обработаны
+    all_processed, stats = get_order_packing_status(order_id)
+
+    if all_processed:
+        # Если все обработано, обновляем статус заказа
+        update_order_status(order_id, 'ready_to_delivery')
+
+        order_data = get_order_by_id(order_id)
+
+        # Формируем сообщение для курьеров
+        order_message = format_order_message(
+            order_id=order_data['id'],
+            product_list=order_data['products'],
+            gift=order_data['gift'],
+            note=order_data['note'],
+            sale_type=order_data['order_type'],
+            manager_name=order_data.get('manager_name', ''),
+            manager_username=order_data.get('manager_username', ''),
+            total_price=order_data['total_price'],
+            avito_boxes=stats['packed'],  # Используем количество реально упакованных коробок
+            hide_track_prices=True
+        )
+
+        # Получаем фотографии для Авито
+        photos = get_avito_photos(order_id) if order_data['order_type'] == 'avito' else None
+
+        # Уведомляем курьеров
+        notify_couriers(
+            order_message,
+            state,
+            avito_photos=photos,
+            reply_message_id=order_data['message_id']
+        )
+
+        message = (
+            f"✅ Трек-номер {tracking_number} упакован\n\n"
+            f"📊 Статистика заказа:\n"
+            f"Всего трек-номеров: {stats['total']}\n"
+            f"Упаковано: {stats['packed']}\n"
+            f"Пропущено: {stats['skipped']}\n\n"
+            f"Заказ передан в доставку!"
+        )
+        try:
+            reply_params = ReplyParameters(message_id=int(message_reply))
+            bot.send_message(
+                CHANNEL_CHAT_ID,
+                f"Заказ #{str(order_id).zfill(4)}ㅤ готов к доставке!\n",
+                reply_parameters=reply_params)
+        except telebot.apihelper.ApiTelegramException as e:
+            if e.error_code == 400 and "message to be replied not found" in e.description:
+                # Если сообщение не найдено, отправляем без reply
+                bot.send_message(
+                    CHANNEL_CHAT_ID,
+                    f"Заказ #{str(order_id).zfill(4)}ㅤ готов к доставке!\n",
+                )
+        # Если сообщение не найдено, отправляем без reply
+
+        bot.edit_message_text(
+            message,
+            call.message.chat.id,
+            call.message.message_id
+        )
+    else:
+        message = f"✅ Трек-номер {tracking_number} упакован"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(
+            "🔙 Вернуться к списку",
+            callback_data=f"pack_goods_{order_id}_{message_reply}"
+        ))
+
+    bot.edit_message_text(
+        message,
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup if not all_processed else None
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('skip_pack_'))
+def skip_tracking_packing(call: types.CallbackQuery, state: StateContext):
+    """Обработчик пропуска упаковки трек-номера"""
+    _, _, order_id, tracking_number, reply_message = call.data.split('_')
+
+    handle_pack_tracking(order_id, tracking_number, False, None)
+
+    # Проверяем, все ли трек-номера обработаны
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                    SELECT 
+                        COUNT(*) as total,
+                        COUNT(*) FILTER (WHERE packing_status = 'pending' OR packing_status = 'in_packing') as pending,
+                        COUNT(*) FILTER (WHERE packing_status = 'closed') as packed,
+                        COUNT(*) FILTER (WHERE packing_status = 'skipped') as skipped
+                    FROM avito_photos
+                    WHERE order_id = %s
+                """, [order_id])
+            stats = cursor.fetchone()
+
+            if stats[1] == 0:  # Если нет pending трек-номеров
+                # Заказ полностью обработан
+                update_order_status(order_id, 'ready_to_delivery')
+
+                # Отправляем сообщение о завершении
+                markup = None
+                message_text = (
+                    f"⏭️ Упаковка пропущена\n\n"
+                    f"📊 Статистика заказа:\n"
+                    f"Всего трек-номеров: {stats[0]}\n"
+                    f"Упаковано: {stats[2]}\n"
+                    f"Пропущено: {stats[3]}\n\n"
+                    f"Заказ готов к доставке!"
+                )
+
+                bot.edit_message_text(
+                    message_text,
+                    call.message.chat.id,
+                    call.message.message_id,
+                    reply_markup=markup
+                )
+
+                # Уведомляем курьеров
+                order_data = get_order_by_id(order_id)
+                if order_data:
+                    order_message = format_order_message(
+                        order_id=order_id,
+                        product_list=order_data['products'],
+                        gift=order_data['gift'],
+                        note=order_data['note'],
+                        sale_type=order_data['order_type'],
+                        manager_name=order_data.get('manager_name', ''),
+                        manager_username=order_data.get('manager_username', ''),
+                        total_price=order_data['total_price'],
+                        avito_boxes=stats[2],  # Используем количество упакованных коробок
+                        hide_track_prices=True
+                    )
+
+                    photos = get_avito_photos(order_id)
+                    notify_couriers(
+                        order_message,
+                        state,
+                        avito_photos=photos,
+                        reply_message_id=reply_message
+                    )
+            else:
+                # Еще есть необработанные трек-номера
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton(
+                    "🔙 Вернуться к списку",
+                    callback_data=f"pack_goods_{order_id}_{reply_message}"
+                ))
+                message_text = f"Трек-номер {tracking_number} пропущен"
+
+                bot.edit_message_text(
+                    message_text,
+                    call.message.chat.id,
+                    call.message.message_id,
+                    reply_markup=markup
+                )
+
+    state.delete()
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('repack_pack_'))
+def repack_tracking_packing(call: types.CallbackQuery, state: StateContext):
+    """Обработчик переупаковки трек-номера"""
+    _, _, order_id, tracking_number, reply_message = call.data.split('_')
+
+    # Сохраняем данные для последующей обработки
+    state.add_data(
+        pending_repack_order_id=order_id,
+        pending_repack_tracking=tracking_number,
+        pending_repack_reply_message=reply_message
+    )
+
+    bot.edit_message_text(
+        f"Укажите причину переупаковки для трек-номера {tracking_number}:",
+        call.message.chat.id,
+        call.message.message_id
+    )
+
+    state.set(AppStates.enter_repack_reason)
+
+@bot.message_handler(state=AppStates.enter_repack_reason)
+def handle_repack_reason(message: types.Message, state: StateContext):
+    """Обработчик ввода причины переупаковки"""
+    with state.data() as data:
+        order_id = data['pending_repack_order_id']
+        tracking_number = data['pending_repack_tracking']
+        reply_message = data.get('pending_repack_reply_message')
+
+    # Обновляем статус и причину в базе
+    handle_pack_tracking(order_id, tracking_number, True, message.text.strip())
+
+    # Проверяем, все ли трек-номера обработаны
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) as total,
+                    COUNT(*) FILTER (WHERE packing_status = 'pending' OR packing_status = 'in_packing') as pending,
+                    COUNT(*) FILTER (WHERE packing_status = 'closed') as packed,
+                    COUNT(*) FILTER (WHERE packing_status = 'skipped') as skipped
+                FROM avito_photos
+                WHERE order_id = %s
+            """, [order_id])
+            stats = cursor.fetchone()
+
+            if stats[1] == 0:  # Если нет pending трек-номеров
+                # Заказ полностью обработан
+                update_order_status(order_id, 'ready_to_delivery')
+
+                # Отправляем сообщение о завершении
+                markup = None
+                message_text = (
+                    f"✅ Переупаковка выполнена\n\n"
+                    f"📊 Статистика заказа:\n"
+                    f"Всего трек-номеров: {stats[0]}\n"
+                    f"Упаковано: {stats[2]}\n"
+                    f"Пропущено: {stats[3]}\n\n"
+                    f"Заказ готов к доставке!"
+                )
+
+                bot.send_message(
+                    message.chat.id,
+                    message_text,
+                    reply_markup=markup
+                )
+
+                # Уведомляем курьеров
+                order_data = get_order_by_id(order_id)
+                if order_data:
+                    order_message = format_order_message(
+                        order_id=order_id,
+                        product_list=order_data['products'],
+                        gift=order_data['gift'],
+                        note=order_data['note'],
+                        sale_type=order_data['order_type'],
+                        manager_name=order_data.get('manager_name', ''),
+                        manager_username=order_data.get('manager_username', ''),
+                        total_price=order_data['total_price'],
+                        avito_boxes=stats[2],  # Используем количество упакованных коробок
+                        hide_track_prices=True
+                    )
+
+                    photos = get_avito_photos(order_id)
+                    notify_couriers(
+                        order_message,
+                        state,
+                        avito_photos=photos,
+                        reply_message_id=reply_message
+                    )
+            else:
+                # Еще есть необработанные трек-номера
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton(
+                    "🔙 Вернуться к списку",
+                    callback_data=f"pack_goods_{order_id}_{reply_message}"
+                ))
+                message_text = f"Трек-номер {tracking_number} переупакован"
+
+                bot.send_message(
+                    message.chat.id,
+                    message_text,
+                    reply_markup=markup
+                )
+
+    state.delete()
+
+@bot.message_handler(state=AppStates.enter_skip_reason)
+def handle_skip_reason(message: types.Message, state: StateContext):
+    """Обработчик ввода причины пропуска упаковки"""
+    with state.data() as data:
+        order_id = data['pending_skip_order_id']
+        tracking_number = data['pending_skip_tracking']
+        reply_message = data.get('pending_skip_reply_message')
+
+    # Обновляем статус и причину в базе
+    handle_pack_tracking(order_id, tracking_number, False, message.text.strip())
+
+    # Проверяем, все ли трек-номера обработаны
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) as total,
+                    COUNT(*) FILTER (WHERE packing_status = 'pending' OR packing_status = 'in_packing') as pending,
+                    COUNT(*) FILTER (WHERE packing_status = 'closed') as packed,
+                    COUNT(*) FILTER (WHERE packing_status = 'skipped') as skipped
+                FROM avito_photos
+                WHERE order_id = %s
+            """, [order_id])
+            stats = cursor.fetchone()
+
+            if stats[1] == 0:  # Если нет pending трек-номеров
+                # Заказ полностью обработан
+                update_order_status(order_id, 'ready_to_delivery')
+
+                # Отправляем сообщение о завершении
+                markup = None
+                message_text = (
+                    f"⏭️ Упаковка пропущена\n\n"
+                    f"📊 Статистика заказа:\n"
+                    f"Всего трек-номеров: {stats[0]}\n"
+                    f"Упаковано: {stats[2]}\n"
+                    f"Пропущено: {stats[3]}\n\n"
+                    f"Заказ готов к доставке!"
+                )
+
+                bot.send_message(
+                    message.chat.id,
+                    message_text,
+                    reply_markup=markup
+                )
+
+                # Уведомляем курьеров
+                order_data = get_order_by_id(order_id)
+                if order_data:
+                    order_message = format_order_message(
+                        order_id=order_id,
+                        product_list=order_data['products'],
+                        gift=order_data['gift'],
+                        note=order_data['note'],
+                        sale_type=order_data['order_type'],
+                        manager_name=order_data.get('manager_name', ''),
+                        manager_username=order_data.get('manager_username', ''),
+                        total_price=order_data['total_price'],
+                        avito_boxes=stats[2],  # Используем количество упакованных коробок
+                        hide_track_prices=True
+                    )
+
+                    photos = get_avito_photos(order_id)
+                    notify_couriers(
+                        order_message,
+                        state,
+                        avito_photos=photos,
+                        reply_message_id=reply_message
+                    )
+            else:
+                # Еще есть необработанные трек-номера
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton(
+                    "🔙 Вернуться к списку",
+                    callback_data=f"pack_goods_{order_id}_{reply_message}"
+                ))
+                message_text = f"Трек-номер {tracking_number} пропущен"
+
+                bot.send_message(
+                    message.chat.id,
+                    message_text,
+                    reply_markup=markup
+                )
+
+    state.delete()
+
+
 
 @bot.callback_query_handler(func=lambda call: call.data == 'confirm_final_order')
 def confirm_final_order(call: types.CallbackQuery, state: StateContext):

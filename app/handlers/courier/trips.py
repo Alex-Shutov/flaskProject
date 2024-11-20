@@ -298,7 +298,6 @@ def get_avito_order_markup(order_id, track_numbers, current_order_selections):
     )
 
     return markup
-
 def show_avito_trip_order(call: CallbackQuery, state: StateContext, order_id: int):
     """Показывает информацию о заказе Авито в поездке"""
     try:

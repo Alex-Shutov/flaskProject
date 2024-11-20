@@ -50,7 +50,13 @@ class AppStates(StatesGroup):
     picked_action = State()
     enter_date_range=State()
     start_date=State()
+    enter_repacking_reason=State()
     end_date=State()
+    enter_skip_reason = State()
+    pending_skip_order_id = State()
+    pending_skip_tracking = State()
+    pending_skip_reply_message = State()
+    enter_repack_reason=State()
 
 class AdminStates(StatesGroup):
     choose_type_product = State()  # выбор типа продукта
@@ -83,6 +89,8 @@ class AdminStates(StatesGroup):
     enter_avito_price = State()
     editing_setting=State()
     edit_setting=State()
+    select_supplier = State()
+    manage_packing_rules=State()
 
 class ReportStates(StatesGroup):
     report_type_id = State()

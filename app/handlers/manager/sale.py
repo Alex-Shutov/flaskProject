@@ -40,6 +40,8 @@ from states import DirectStates
 
 from database import get_setting_value
 
+from database import check_packing_before_order
+
 # Инициализация хранилища состояний
 bot = get_bot_instance()
 
@@ -236,7 +238,7 @@ def process_gift(message: types.Message, state: StateContext):
 
 
 
-@bot.callback_query_handler(state=SaleStates.note, func=lambda call: call.data == 'skip')
+@bot.callback_query_handler( func=lambda call: call.data == 'skip')
 def skip_note(call: types.CallbackQuery, state: StateContext):
     state.add_data(note=None)
     with state.data() as data:
@@ -261,45 +263,27 @@ def process_note(message: types.Message, state: StateContext):
 
 
 def check_packing_requirements(chat_id, state: StateContext):
-    """Проверяет требования к упаковке для заказа Авито"""
+    """
+    Проверяет требования к упаковке для заказа используя правила из БД
+    """
     with state.data() as data:
-        product_dict = data.get('product_dict', {})
-        avito_dict = data.get('avito_photos_tracks', {})
-        # Проверяем количество товаров
-        total_products = sum(len(params) for params in product_dict.values()) if data.get('sale_type') == 'delivery' else len(avito_dict.values())
-        print(total_products, '123')
+        product_dict = data.get('avito_products', {})
+        sale_type = data.get('sale_type')
 
-        # Если товар один, проверяем его тип
-        if total_products == 1:
-            product_id = list(product_dict.keys())[0]
-            product_info = get_product_info_with_params(product_id)
-            param_type = product_info.get("param_parameters", {}).get("Тип", None)
+        # Проверяем необходимость упаковки
+        needs_packing, reason = check_packing_before_order(product_dict, sale_type)
 
-            if not param_type or param_type.lower() == "китай":
-                # Не требует упаковки
-                data['is_need_packing'] = False
-                state.set(AvitoStates.avito_photo)
-                bot.send_message(chat_id, "Товар не требует упаковки.")
-                review_order_data(chat_id, state)
-                return
+        # Сохраняем результат
+        data['is_need_packing'] = needs_packing
+        data['packing_reason'] = reason
 
-        # Если товаров больше одного или тип - Россия
-        data['is_need_packing'] = True
-        state.set(SaleStates.pack_id)
+        # Отправляем сообщение о результате
+        message = "Товар требует упаковки" if needs_packing else "Товар не требует упаковки"
+        message += f"\nПричина: {reason}"
 
-    # Формируем кнопки после завершения работы с состоянием
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("Да", callback_data="pack_yes"),
-        types.InlineKeyboardButton("Нет", callback_data="pack_no")
-    )
-
-    bot.send_message(
-        chat_id,
-        "Упакуете продукт самостоятельно?",
-        reply_markup=markup
-    )
-
+        state.set(AvitoStates.total_price)
+        # mess=bot.send_message(chat_id, message)
+        review_order_data(chat_id, state)
 
 @bot.callback_query_handler(func=lambda call: call.data in ['pack_yes', 'pack_no'], state=SaleStates.pack_id)
 def handle_pack_choice(call: types.CallbackQuery, state: StateContext):

@@ -264,7 +264,8 @@ def set_admin_commands(bot,message):
         types.BotCommand("/reports", "Отчеты"),
         types.BotCommand("/settings", "Настройки"),
         types.BotCommand("/restart", "Перезапустить бота"),
-        types.BotCommand("/transfer", "Передать заказ")
+        types.BotCommand("/transfer", "Передать заказ"),
+        types.BotCommand("/pack_info","Настройка упаковки")
     ]
     bot.set_my_commands(admin_commands,scope=types.BotCommandScopeChat(message.chat.id))
 
@@ -357,3 +358,26 @@ def generate_map_link(trip_items: List[Dict], warehouse_location: Dict) -> str:
         "&z=11"
         "&l=map"
     )
+
+
+def check_tracking_packing_requirements(tracking_items: list) -> tuple[bool, str]:
+    """
+    Проверяет необходимость упаковки для одного трек-номера
+
+    Args:
+        tracking_items: список товаров в трек-номере
+    Returns:
+        tuple[bool, str]: (нужна ли обязательная упаковка, причина)
+    """
+    russian_items = [item for item in tracking_items if get_product_origin(item['product_id']) == 'russia']
+    chinese_items = [item for item in tracking_items if get_product_origin(item['product_id']) == 'china']
+
+    # Если есть хотя бы один российский товар - упаковка обязательна
+    if russian_items:
+        return True, "В трек-номере есть российские товары"
+
+    # Если только китайские товары - отправляем на проверку упаковщику
+    if chinese_items:
+        return False, "Только китайские товары, требуется проверка упаковщиком"
+
+    return False, "Нет товаров в трек-номере"

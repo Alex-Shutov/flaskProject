@@ -26,6 +26,8 @@ from handlers.admin.genereal_report import generate_detailed_sales_report
 
 from database import soft_delete_product_param, soft_delete_product, soft_delete_type_product
 
+from app.database import get_all_suppliers
+
 
 #
 #
@@ -251,7 +253,7 @@ def enter_product_stock(message: types.Message, state: StateContext):
     state.delete()
 
 
-@bot.callback_query_handler(func=lambda call: call.data.endswith('-view'))
+@bot.callback_query_handler(func=lambda call: call.data.endswith('-view') and (call.data.startswith('type_product') or call.data.startswith('product') or call.data.startswith('product_param')  ))
 def handle_view_command(call: types.CallbackQuery, state: StateContext):
     command = call.data.split('-')[0]
 
@@ -514,22 +516,91 @@ def handle_manage_products(call, state: StateContext):
 #     bot.send_message(message.chat.id, "Параметры успешно установлены.")
 
 
+# @bot.callback_query_handler(func=lambda call: call.data in ['is_main_product_yes', 'is_main_product_no'])
+# def handle_is_main_product(call,state):
+#     is_main_product = True if call.data == 'is_main_product_yes' else False
+#     # Сохраняем значение в состоянии пользователя
+#     state.add_data(is_main_product=is_main_product)
+#     # Получаем параметры типа продукта
+#     message = call.message
+#     with state.data() as data:
+#         product_name = data.get("product_name")
+#         selected_type_info = data.get('selected_type_product_info')
+#         type_product_params = selected_type_info.get('params', {})
+#         sale_price = data.get('sale_price', 0)
+#         avito_delivery_price = data.get('avito_delivery_price', 0)
+#
+#
+#     print('selected_type_info')
+#
+#     # Проверка на наличие параметров в типе продукта
+#     if not type_product_params:
+#         # Если параметров нет, создаём продукт без параметров
+#         skip_markup = types.InlineKeyboardMarkup()
+#         skip_markup.add(types.InlineKeyboardButton("Пропустить", callback_data="skip_product_specific_params"))
+#
+#         bot.send_message(
+#             message.chat.id,
+#             "Параметры типа продукта отсутствуют. Добавьте параметры для свойств продукта или пропустите шаг.\n\n"
+#             "На текущий момент поддерживаются следующие типы данных:\n"
+#             "- Строка: просто название\n"
+#             "- Перечисление: Название(параметр1, параметр2,...)\n"
+#             "- Число: +Название+\n\n"
+#             "Каждый параметр начинается с новой строки",
+#             reply_markup=skip_markup
+#         )
+#
+#         state.set(AdminStates.enter_product_specific_params)
+#         return
+#
+#         # Формируем сообщение с параметрами, которые необходимо заполнить
+#     param_list = "\n".join(
+#         [f"{param_name} ({param_info['type']})" for param_name, param_info in type_product_params.items()])
+#     message_text = f"Введите значения следующих параметров для продукта '{product_name}':\n\n{param_list}\n\nЗначения указывайте через запятую в том же порядке."
+#     bot.send_message(message.chat.id, message_text)
+#
+#     # Переходим к следующему состоянию
+#     state.set(AdminStates.enter_product_params)
 @bot.callback_query_handler(func=lambda call: call.data in ['is_main_product_yes', 'is_main_product_no'])
-def handle_is_main_product(call,state):
+def handle_is_main_product(call, state):
     is_main_product = True if call.data == 'is_main_product_yes' else False
     # Сохраняем значение в состоянии пользователя
     state.add_data(is_main_product=is_main_product)
+
+    # Получаем список поставщиков
+    suppliers = get_all_suppliers()
+    if not suppliers:
+        bot.send_message(call.message.chat.id, "Ошибка: нет доступных поставщиков в системе.")
+        return
+
+    # Создаем клавиатуру для выбора поставщика
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for supplier in suppliers:
+        markup.add(types.InlineKeyboardButton(
+            f"{supplier[1]} ({supplier[2]})",  # name (country)
+            callback_data=f"supplier_{supplier[0]}"
+        ))
+
+    bot.edit_message_text(
+        "Выберите поставщика продукта:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+    state.set(AdminStates.select_supplier)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('supplier_'), state=AdminStates.select_supplier)
+def handle_supplier_selection(call: types.CallbackQuery, state: StateContext):
+    supplier_id = int(call.data.split('_')[1])
+    state.add_data(supplier_id=supplier_id)
+
     # Получаем параметры типа продукта
     message = call.message
     with state.data() as data:
         product_name = data.get("product_name")
         selected_type_info = data.get('selected_type_product_info')
         type_product_params = selected_type_info.get('params', {})
-        sale_price = data.get('sale_price', 0)
-        avito_delivery_price = data.get('avito_delivery_price', 0)
-
-
-    print('selected_type_info')
 
     # Проверка на наличие параметров в типе продукта
     if not type_product_params:
@@ -547,15 +618,12 @@ def handle_is_main_product(call,state):
             "Каждый параметр начинается с новой строки",
             reply_markup=skip_markup
         )
-
         state.set(AdminStates.enter_product_specific_params)
         return
-
-        # Формируем сообщение с параметрами, которые необходимо заполнить
     param_list = "\n".join(
         [f"{param_name} ({param_info['type']})" for param_name, param_info in type_product_params.items()])
     message_text = f"Введите значения следующих параметров для продукта '{product_name}':\n\n{param_list}\n\nЗначения указывайте через запятую в том же порядке."
-    bot.send_message(message.chat.id, message_text)
+    bot.edit_message_text(message_text, call.message.chat.id, call.message.message_id)
 
     # Переходим к следующему состоянию
     state.set(AdminStates.enter_product_params)
@@ -681,7 +749,7 @@ def enter_product_specific_params(message: types.Message, state: StateContext):
     raw_params = message.text.split('\n')
     specific_params = {}
 
-    # Парсинг параметров и определение их типа, как и для типа продукта
+    # Парсинг параметров и определение их типа
     for param in raw_params:
         param = param.strip()
         param_name = param.replace('+', '').split('(')[0].strip()
@@ -695,51 +763,68 @@ def enter_product_specific_params(message: types.Message, state: StateContext):
     # Получаем данные из состояния
     with state.data() as data:
         product_name = data.get('product_name')
-        product_params = data.get('product_params',{})
+        product_params = data.get('product_params', {})
         selected_type_info = data.get('selected_type_product_info')
         type_product_id = selected_type_info['id']
         is_main_product = data.get('is_main_product')
+        supplier_id = data.get('supplier_id')
+        sale_price = data.get('sale_price', 0)
+        avito_delivery_price = data.get('avito_delivery_price', 0)
 
-    # Создаем продукт, добавляем основной набор параметров
-    product_id = create_product(product_name, type_product_id, is_main_product,  product_params, specific_params)
+    # Создаем продукт с указанием поставщика
+    product_id = create_product(
+        name=product_name,
+        type_id=type_product_id,
+        supplier_id=supplier_id,  # Добавляем поставщика
+        is_main_product=is_main_product,
+        product_values=product_params,
+        param_parameters=specific_params,
+        sale_price=sale_price,
+        avito_delivery_price=avito_delivery_price
+    )
+
     formatted_product_values = format_type_product_values(product_params)
     formatted_specific_params = format_product_params(specific_params)
-    # Создаем параметры для свойств продукта
-    # create_product_param(product_id, specific_params)
+
     message_text = (
         f"Продукт '{product_name}' и его свойства успешно добавлены.\n\n"
         f"Значения параметров типа продукта:\n{formatted_product_values}\n"
         f"Параметры свойств продукта:\n{formatted_specific_params}"
     )
-    # Сообщение о завершении
     bot.send_message(message.chat.id, message_text)
-    # Завершаем создание и очищаем состояние
     state.delete()
 
 @bot.callback_query_handler(func=lambda call: call.data == "skip_product_specific_params")
 def skip_product_specific_params(call: types.CallbackQuery, state: StateContext):
     with state.data() as data:
         product_name = data.get('product_name')
-        product_params = data.get('product_params',{})
+        product_params = data.get('product_params', {})
         selected_type_info = data.get('selected_type_product_info')
         type_product_id = selected_type_info['id']
         is_main_product = data.get('is_main_product')
+        supplier_id = data.get('supplier_id')
+        sale_price = data.get('sale_price', 0)
+        avito_delivery_price = data.get('avito_delivery_price', 0)
 
+    # Создаем продукт без дополнительных параметров, но с указанием поставщика
+    product_id = create_product(
+        name=product_name,
+        type_id=type_product_id,
+        supplier_id=supplier_id,
+        is_main_product=is_main_product,
+        product_values=product_params,
+        sale_price=sale_price,
+        avito_delivery_price=avito_delivery_price
+    )
 
-    # Создаем продукт без дополнительных параметров
-    product_id = create_product(product_name, type_product_id, is_main_product, product_params)
-
-    # Форматируем значения параметров типа продукта для отображения
     formatted_product_values = format_type_product_values(product_params)
 
-    # Сообщение о завершении
     message_text = (
         f"Продукт '{product_name}' успешно создан без дополнительных параметров.\n\n"
         f"Значения параметров типа продукта:\n{formatted_product_values}"
     )
     bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=message_text)
 
-    # Завершаем создание
     state.delete()
 def show_crud_keyboard(message, command):
     # Создаем инлайн-клавиатуру CRUD
@@ -931,7 +1016,7 @@ def handle_stock_product_selection(call: types.CallbackQuery, state: StateContex
     for param in params:
         markup.add(types.InlineKeyboardButton(
             f"{param[1]} (Остаток: {param[2]})",
-            callback_data=f"stock_param_{param[0]}"
+            callback_data=f"stock_param_{param[0]}_{param[2]}"
         ))
 
     state.add_data(selected_product_id=product_id)
@@ -955,12 +1040,13 @@ def handle_stock_product_selection(call: types.CallbackQuery, state: StateContex
                             state=AdminStates.manage_stock_param)
 def handle_stock_param_selection(call: types.CallbackQuery, state: StateContext):
     param_id = int(call.data.split('_')[2])
+    prev_stock=call.data.split('_')[3]
     state.add_data(selected_param_id=param_id)
 
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("➕ Добавить", callback_data="stock_add"),
-        types.InlineKeyboardButton("➖ Убавить", callback_data="stock_subtract")
+        types.InlineKeyboardButton("➕ Добавить", callback_data=f"stock_add_{prev_stock}"),
+        types.InlineKeyboardButton("➖ Убавить", callback_data=f"stock_subtract_{prev_stock}")
     )
 
     bot.edit_message_text(
@@ -976,10 +1062,11 @@ def handle_stock_param_selection(call: types.CallbackQuery, state: StateContext)
 @bot.callback_query_handler(func=lambda call: call.data.startswith('stock_'), state=AdminStates.manage_stock_action)
 def handle_stock_action(call: types.CallbackQuery, state: StateContext):
     action = call.data.split('_')[1]
+    prev_stock = call.data.split('_')[2]
     state.add_data(stock_action=action)
 
     bot.edit_message_text(
-        "Введите количество:",
+        f"Введите количество:\nПредыдущее кол-во: {prev_stock}",
         call.message.chat.id,
         call.message.message_id
     )

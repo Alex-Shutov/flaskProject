@@ -3,6 +3,7 @@ import json
 from contextlib import contextmanager
 from threading import Lock
 from typing import List, Dict, Optional, Union
+from psycopg2.extras import Json
 
 import psycopg2
 
@@ -989,15 +990,66 @@ def create_type_product(title, type_params):
             cursor.execute(query, params)
             return cursor.fetchone()[0]
 
-def create_product(name, type_id, is_main_product=False, product_values={}, param_parameters={}):
+
+def create_product(
+        name: str,
+        type_id: int,
+        supplier_id: int,
+        is_main_product: bool = False,
+        product_values: dict = {},
+        param_parameters: dict = {},
+        sale_price: float = 0,
+        avito_delivery_price: float = 0
+) -> int:
+    """
+    Создает новый продукт в базе данных.
+
+    Args:
+        name: Название продукта
+        type_id: ID типа продукта
+        supplier_id: ID поставщика
+        is_main_product: Является ли продукт основным
+        product_values: Значения параметров продукта
+        param_parameters: Параметры продукта
+        sale_price: Цена продажи
+        avito_delivery_price: Цена доставки Авито
+
+    Returns:
+        int: ID созданного продукта
+    """
     query = """
-        INSERT INTO products (name, type_id, created_at, product_values, param_parameters, is_main_product)
-        VALUES (%s, %s, NOW(), %s::jsonb, %s::jsonb, %s)
+        INSERT INTO products (
+            name, 
+            type_id,
+            supplier_id,
+            created_at,
+            product_values,
+            param_parameters,
+            is_main_product,
+            sale_price,
+            avito_delivery_price
+        )
+        VALUES (
+            %s, %s, %s, NOW(), %s::jsonb, %s::jsonb, %s, %s, %s
+        )
         RETURNING id
     """
+
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute(query, (name, type_id, json.dumps(product_values), json.dumps(param_parameters), is_main_product))
+            cursor.execute(
+                query,
+                (
+                    name,
+                    type_id,
+                    supplier_id,
+                    json.dumps(product_values),
+                    json.dumps(param_parameters),
+                    is_main_product,
+                    sale_price,
+                    avito_delivery_price
+                )
+            )
             return cursor.fetchone()[0]
 
 def create_product_param(product_id, title, stock, param_values):
@@ -2200,3 +2252,326 @@ def get_users_by_role(roles: Union[str, List[str]]) -> List[Dict]:
                 result.append(dict(zip(columns, row)))
 
             return result
+
+
+def check_packing_before_order(product_dict: dict, sale_type: str) -> tuple[bool, str]:
+    """
+    Проверяет необходимость упаковки до создания заказа
+
+    Args:
+        product_dict: Словарь с товарами из state
+        sale_type: Тип продажи (avito/delivery/direct)
+    Returns:
+        tuple[bool, str]: (нужна ли упаковка, причина)
+    """
+    try:
+        # Формируем список товаров в том же формате, что и в check_order_packing
+        order_items = []
+
+        if sale_type == 'avito':
+            # Для Авито обрабатываем продукты по трек-номерам
+            for track_info in product_dict.values():
+                for product_id, param_ids in track_info['products'].items():
+                    product_info = get_product_info_with_params(product_id)
+                    for param_id in param_ids:
+                        order_items.append({
+                            'product_id': product_id,
+                            'name': product_info.get('name'),
+                            'params': param_id,
+                            'origin': get_product_origin(product_id)
+                        })
+        else:
+            # Для остальных типов заказов
+            for product_id, param_ids in product_dict.items():
+                product_info = get_product_info_with_params(product_id)
+                for param_id in param_ids:
+                    order_items.append({
+                        'product_id': product_id,
+                        'name': product_info.get('name'),
+                        'params': param_id,
+                        'origin': get_product_origin(product_id)
+                    })
+
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                # Проверяем правила упаковки
+                cursor.execute("""
+                                  SELECT * FROM check_packing_required(%s)
+                              """, [Json(order_items)])
+                result = cursor.fetchone()
+
+                if not result:
+                    return True, "Ошибка проверки правил упаковки"
+
+                needs_packing, rule_id, details = result
+
+                # Получаем описание правила
+                reason = "Правило по умолчанию"
+                if rule_id:
+                    cursor.execute(
+                        "SELECT description FROM packing_rules WHERE id = %s",
+                        [rule_id]
+                    )
+                    rule_info = cursor.fetchone()
+                    if rule_info:
+                        reason = rule_info[0]
+
+                return needs_packing, reason
+
+    except Exception as e:
+        print(f"Error in check_packing_before_order: {e}")
+        return True, f"Ошибка проверки правил: {str(e)}"
+
+
+def check_order_packing(order_id: int, tracking_number: Optional[str] = None) -> tuple[bool, str]:
+    """
+    Проверяет необходимость упаковки заказа
+
+    Args:
+        order_id: ID заказа
+    Returns:
+        tuple[bool, str]: (нужна ли упаковка, причина)
+    """
+    try:
+        order = get_order_by_id(order_id)
+        if not order:
+            return True, "Заказ не найден"
+
+        # Формируем список товаров для проверки
+        order_items = []
+
+        if order['order_type'] == 'avito':
+            # Для Авито обрабатываем продукты по трек-номерам
+            for track_number, track_info in order['products'].items():
+                # Добавляем только продукты, у которых есть product_id
+                for product in track_info.get('products', []):
+                    if isinstance(product, dict) and product.get('product_id'):  # Проверяем структуру продукта
+                        if tracking_number is None or track_number == tracking_number:
+                            order_items.append({
+                                'product_id': int(product['product_id']),  # Убеждаемся, что id целое число
+                                'name': product.get('name', ''),
+                                'params': product.get('param_id'),
+                                'tracking_number': track_number
+                            })
+        else:
+            # Для остальных типов заказов
+            if 'no_track' in order['products']:
+                products = order['products']['no_track'].get('products', [])
+            else:
+                products = order['products'].get('products', [])
+
+            for product in products:
+                if isinstance(product, dict) and product.get('product_id'):
+                    order_items.append({
+                        'product_id': int(product['product_id']),
+                        'name': product.get('name', ''),
+                        'params': product.get('param_id')
+                    })
+
+        if not order_items:
+            return True, "Нет товаров для проверки"
+
+        # Отладочный вывод
+        print("Order items for checking:", json.dumps(order_items, indent=2))
+
+        # Проверяем правила упаковки
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM check_packing_required(%s::jsonb)",
+                    [Json(order_items)]
+                )
+                result = cursor.fetchone()
+
+                if not result:
+                    return True, "Ошибка проверки правил упаковки"
+
+                needs_packing, rule_id, details = result
+
+                # Получаем описание правила
+                reason = ""
+                if rule_id:
+                    cursor.execute(
+                        "SELECT description FROM packing_rules WHERE id = %s",
+                        [rule_id]
+                    )
+                    rule_info = cursor.fetchone()
+                    if rule_info:
+                        reason = rule_info[0]
+
+                return needs_packing, reason
+
+    except Exception as e:
+        print(f"Error in check_order_packing: {e}")
+        return True, f"Ошибка проверки правил: {str(e)}"
+
+
+def get_product_origin(product_id: int) -> str:
+    """
+    Получает страну происхождения продукта через связанного поставщика.
+
+    Args:
+        product_id: ID продукта
+    Returns:
+        str: Страна происхождения (например, 'china' или 'russia')
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            query = """
+                SELECT s.country
+                FROM products p
+                JOIN suppliers s ON p.supplier_id = s.id
+                WHERE p.id = %s
+            """
+            cursor.execute(query, (product_id,))
+            result = cursor.fetchone()
+
+            if result:
+                return result[0]
+            return 'china'  # Или другое значение по умолчанию
+
+
+def process_order_packing(order_id: int):
+    """
+    Обрабатывает требования к упаковке для всего заказа
+    """
+    order = get_order_by_id(order_id)
+    if not order or order['order_type'] != 'avito':
+        return
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            # Для каждого трек-номера
+            for tracking_number, track_info in order['products'].items():
+                # Проверяем необходимость упаковки
+                needs_packing, reason = check_tracking_packing_requirements(track_info['products'])
+
+                # Сохраняем статус упаковки трек-номера
+                cursor.execute("""
+                    INSERT INTO tracking_package_status 
+                    (order_id, tracking_number, needs_packing, repacking_reason)
+                    VALUES (%s, %s, %s, %s)
+                """, [order_id, tracking_number, needs_packing, reason])
+
+
+
+
+
+def get_order_packing_status(order_id: int) -> tuple[bool, dict]:
+    """
+    Проверяет статус упаковки всех трек-номеров заказа
+
+    Returns:
+        tuple[bool, dict]: (все обработано, статистика)
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) as total,
+                    COUNT(*) FILTER (WHERE packing_status = 'pending') as pending,
+                    COUNT(*) FILTER (WHERE packing_status = 'closed') as packed,
+                    COUNT(*) FILTER (WHERE packing_status = 'skipped') as skipped
+                FROM avito_photos
+                WHERE order_id = %s
+            """, [order_id])
+            stats = cursor.fetchone()
+
+            if not stats:
+                return False, {}
+
+            total, pending, packed, skipped = stats
+            all_processed = pending == 0
+
+            return all_processed, {
+                'total': total,
+                'packed': packed,
+                'skipped': skipped
+            }
+
+
+def update_order_packing_stats(order_id: int):
+    """Обновляет статистику упаковки заказа"""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            # Получаем количество реально упакованных коробок
+            cursor.execute("""
+                SELECT COUNT(*) 
+                FROM avito_photos 
+                WHERE order_id = %s AND packing_status = 'closed'
+            """, [order_id])
+            packed_count = cursor.fetchone()[0]
+
+            # Обновляем заказ
+            cursor.execute("""
+                UPDATE orders 
+                SET packed_boxes_count = %s
+                WHERE id = %s
+            """, [packed_count, order_id])
+
+def handle_pack_tracking(order_id: int, tracking_number: str, is_packed: bool, repacking_reason: str = None):
+    """
+    Обрабатывает решение упаковщика по конкретному трек-номеру
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            # Обновляем статус упаковки трек-номера
+            cursor.execute("""
+                UPDATE avito_photos 
+                SET packing_status = %s,
+                    repacking_reason = %s
+                WHERE order_id = %s AND tracking_number = %s
+            """, [
+                'closed' if is_packed else 'skipped',
+                repacking_reason,
+                order_id,
+                tracking_number
+            ])
+
+            if is_packed:
+                # Если упаковали, увеличиваем счетчик упакованных коробок
+                cursor.execute("""
+                    UPDATE orders 
+                    SET packed_boxes_count = (
+                        SELECT COUNT(*) 
+                        FROM avito_photos 
+                        WHERE order_id = %s AND packing_status = 'closed'
+                    )
+                    WHERE id = %s
+                """, [order_id, order_id])
+
+def get_all_suppliers():
+    """Получает список всех доступных поставщиков"""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            query = """
+                SELECT id, name, country, description 
+                FROM suppliers 
+                WHERE is_available = true 
+                ORDER BY name
+            """
+            cursor.execute(query)
+            return cursor.fetchall()
+
+def get_packing_info(order_id, tracking_number):
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            query = """
+                SELECT
+                    packing_status,
+                    COALESCE(repacking_reason, '') AS repacking_reason
+                FROM avito_photos
+                WHERE order_id = %s AND tracking_number = %s
+                LIMIT 1;
+            """
+            cursor.execute(query, (order_id, tracking_number))
+            result = cursor.fetchone()
+
+            if result:
+                packing_status, repacking_reason = result
+                if packing_status == 'closed' and repacking_reason:
+                    return 'repacked', repacking_reason
+                else:
+                    return packing_status, repacking_reason
+            else:
+                return '', ''
