@@ -349,6 +349,8 @@ def finalize_order(chat_id, username, message_id, state: StateContext):
                 manager_name = manager_info['name']
                 manager_username = manager_info['username']
 
+                process_product_stock(product_dict)
+
                 # Создаем основной заказ
                 order = create_order(product_dict, gift, note, sale_type, manager_id, message_id,
                                         total_price=total_price)
@@ -371,7 +373,6 @@ def finalize_order(chat_id, username, message_id, state: StateContext):
                 update_order_message_id(order['id'],reply_message_id.message_id)
 
 
-                process_product_stock(product_dict)
                 # Удаляем состояние после завершения заказа
                 state.delete()
             except Exception as e:

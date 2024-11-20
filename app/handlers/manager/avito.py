@@ -315,6 +315,10 @@ def finalize_avito_order(chat_id, message_id, manager_username, state: StateCont
                 manager_name = manager_info['name']
                 manager_username = manager_info['username']
 
+                # Обновляем process_product_stock для работы с avito_products
+                for track_info in avito_products.values():
+                    process_product_stock(track_info['products'])
+
                 # Передаем avito_products вместо product_dict
                 order = create_order(
                     avito_products, gift, note, sale_type, manager_id, message_id,
@@ -327,9 +331,6 @@ def finalize_avito_order(chat_id, message_id, manager_username, state: StateCont
                 order_id = order['id']
                 product_list = order['values']
 
-                # Обновляем process_product_stock для работы с avito_products
-                for track_info in avito_products.values():
-                    process_product_stock(track_info['products'])
 
 
                 # Формируем сообщение с информацией о заказе

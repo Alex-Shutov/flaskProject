@@ -341,86 +341,85 @@ def finalize_delivery_order(chat_id,message_id,username, state: StateContext):
     try:
         with state.data() as order_data:
             manager_info = get_user_by_username(username,state)
-            if not manager_info:
-                raise ValueError("Manager info not found")
+        if not manager_info:
+            raise ValueError("Manager info not found")
 
-            product_dict = order_data.get("product_dict")
-            if not product_dict:
-                raise ValueError("No products selected")
-            print(manager_info,'info')
-            # Создаем заказ с обновленными параметрами
-            print(order_data)
-            print(message_id)
-            order_result = create_order(
-                product_dict=product_dict,  # Используем product_dict из состояния
-                gift=order_data.get('gift'),  # Базовый подарок если не указан
-                note=order_data.get('note'),
-                sale_type='delivery',
-                manager_id=manager_info['id'],
-                message_id=message_id,
-                # avito_photos_tracks=None,
-                # packer_id=None,
-                status_order=OrderType.READY_TO_DELIVERY.value,
-                delivery_date=order_data.get('delivery_date'),
-                delivery_time=order_data.get('delivery_time'),
-                delivery_address=order_data.get('delivery_address')['full_address'],
-                contact_phone=order_data.get('contact_phone'),
-                contact_name=order_data.get('contact_name'),
-                total_price=order_data.get('total_price')
-            )
-            print(order_result,'result')
-            if not order_result:
-                raise ValueError("Failed to create order")
+        product_dict = order_data.get("product_dict")
+        if not product_dict:
+            raise ValueError("No products selected")
+        print(manager_info,'info')
+        # Создаем заказ с обновленными параметрами
+        print(order_data)
+        print(message_id)
+        # Уменьшаем количество товара на складе
+        process_product_stock(product_dict)
 
-            order_id = order_result['id']
-            products_info = order_result['values']
+        order_result = create_order(
+            product_dict=product_dict,  # Используем product_dict из состояния
+            gift=order_data.get('gift'),  # Базовый подарок если не указан
+            note=order_data.get('note'),
+            sale_type='delivery',
+            manager_id=manager_info['id'],
+            message_id=message_id,
+            # avito_photos_tracks=None,
+            # packer_id=None,
+            status_order=OrderType.READY_TO_DELIVERY.value,
+            delivery_date=order_data.get('delivery_date'),
+            delivery_time=order_data.get('delivery_time'),
+            delivery_address=order_data.get('delivery_address')['full_address'],
+            contact_phone=order_data.get('contact_phone'),
+            contact_name=order_data.get('contact_name'),
+            total_price=order_data.get('total_price')
+        )
+        print(order_result,'result')
+        if not order_result:
+            raise ValueError("Failed to create order")
 
-            # Формируем сообщение о заказе
-            order_message = format_order_message(
-                order_id=order_id,
-                product_list=products_info.get('general', []),  # Список продуктов из результата
-                gift=order_data.get('gift', "Гирлянда 2м"),
-                note=order_data.get('note'),
-                sale_type=SaleType.DELIVERY.value,
-                manager_name=manager_info['name'],
-                manager_username=manager_info['username'],
-                delivery_date=order_data.get('delivery_date'),
-                delivery_time=order_data.get('delivery_time'),
-                delivery_address=order_data.get('full_address', order_data.get('delivery_address')['full_address']),
-                contact_phone=order_data.get('contact_phone'),
-                contact_name=order_data.get('contact_name'),
-                total_price=order_data.get('total_amount'),
-                zone_name=order_data.get('zone_name'),
-            )
-            # Отправляем сообщение менеджеру
-            bot.send_message(chat_id, order_message)
+        order_id = order_result['id']
+        products_info = order_result['values']
 
-            # Отправляем сообщение в канал
-            channel_message = bot.send_message(CHANNEL_CHAT_ID, order_message)
+        # Формируем сообщение о заказе
+        order_message = format_order_message(
+            order_id=order_id,
+            product_list=products_info.get('general', []),  # Список продуктов из результата
+            gift=order_data.get('gift', "Гирлянда 2м"),
+            note=order_data.get('note'),
+            sale_type=SaleType.DELIVERY.value,
+            manager_name=manager_info['name'],
+            manager_username=manager_info['username'],
+            delivery_date=order_data.get('delivery_date'),
+            delivery_time=order_data.get('delivery_time'),
+            delivery_address=order_data.get('full_address', order_data.get('delivery_address')['full_address']),
+            contact_phone=order_data.get('contact_phone'),
+            contact_name=order_data.get('contact_name'),
+            total_price=order_data.get('total_amount'),
+            zone_name=order_data.get('zone_name'),
+        )
+        # Отправляем сообщение менеджеру
+        bot.send_message(chat_id, order_message)
 
-            # Обновляем message_id в заказе
-            update_order_message_id(order_id, channel_message.message_id)
+        # Отправляем сообщение в канал
+        channel_message = bot.send_message(CHANNEL_CHAT_ID, order_message)
 
-            zone_manager.save_delivery_address(order_id,
-                                            order_data.get('temp_address_data')['components'],
-                                            order_data.get('temp_address_data')['coordinates'])
-            # Уменьшаем количество товара на складе
-            process_product_stock(product_dict)
+        # Обновляем message_id в заказе
+        update_order_message_id(order_id, channel_message.message_id)
 
-            # Уведомляем курьеров
-            notify_couriers(
-                order_message,
-                state,
-                avito_photos=[],
-                reply_message_id=channel_message.message_id
-            )
-            logger.warning('notified')
-            # Очищаем состояние
-            state.delete()
+        zone_manager.save_delivery_address(order_id,
+                                        order_data.get('temp_address_data')['components'],
+                                        order_data.get('temp_address_data')['coordinates'])
+
+
+        # Уведомляем курьеров
+        notify_couriers(
+            order_message,
+            state,
+            avito_photos=[],
+            reply_message_id=channel_message.message_id
+        )
+        logger.warning('notified')
+        # Очищаем состояние
+        state.delete()
 
     except Exception as e:
-        bot.reply_to(
-            message_id,
-            "Произошла ошибка при создании заказа. Пожалуйста, попробуйте еще раз."
-        )
+        bot.send_message(chat_id, f"Произошла ошибка при оформлении заказа: {str(e)}")
         logger.warning(f"Error in finalize_delivery_order: {e}")
