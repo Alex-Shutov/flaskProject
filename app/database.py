@@ -102,7 +102,7 @@ def get_connection():
 
 def check_user_access(username):
     # Добавляем "@" и приводим к нижнему регистру
-    formatted_username = f"@{username.lower()}"
+    formatted_username = f"@{username}"
 
     with get_connection() as conn:
         with conn.cursor() as cursor:
@@ -118,7 +118,7 @@ def check_user_access(username):
 def get_user_info(username):
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT id, name, username,telegram_id,role FROM users WHERE username = %s", (f"@{username.lower()}",))
+            cursor.execute("SELECT id, name, username,telegram_id,role FROM users WHERE username = %s", (f"@{username}",))
             user_info = cursor.fetchone()
 
             if not user_info:
@@ -436,7 +436,7 @@ def get_orders(order_type=None, username=None, status=None, is_courier_null=Fals
                 params.append(status)
 
             if username:
-                formatted_username = username if username.startswith('@') else f"@{username.lower()}"
+                formatted_username = username if username.startswith('@') else f"@{username}"
                 cursor.execute("SELECT id FROM users WHERE username = %s", (formatted_username,))
                 user_id = cursor.fetchone()
                 if not user_id:
@@ -2038,7 +2038,7 @@ def get_courier_trips(courier_username: str, start_date: str, end_date: str):
             """
 
             cursor.execute(query, (
-                f"@{courier_username.lower()}" if not courier_username.startswith('@') else courier_username,
+                f"@{courier_username}" if not courier_username.startswith('@') else courier_username,
                 start_date,
                 end_date
             ))
