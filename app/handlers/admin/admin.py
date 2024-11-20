@@ -26,7 +26,7 @@ from handlers.admin.genereal_report import generate_detailed_sales_report
 
 from database import soft_delete_product_param, soft_delete_product, soft_delete_type_product
 
-from app.database import get_all_suppliers
+from database import get_all_suppliers
 
 
 #
