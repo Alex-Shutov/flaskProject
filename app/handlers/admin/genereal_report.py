@@ -56,11 +56,13 @@ def generate_detailed_sales_report(start_date, end_date, filename="detailed_sale
         "Причина переупаковки",  # Новая колонка
         "Статус заказа",
         "Менеджер",
+        "Показал",
         "Упаковщик",
         "Курьер",
         "Заметка менеджера",
         "Заметка курьера",
         "Оплата менеджеру",
+        "Оплата показавшему",
         "Оплата упаковщику",
         "Сумма продажи",
         "Сумма доставки",
@@ -94,12 +96,23 @@ def generate_detailed_sales_report(start_date, end_date, filename="detailed_sale
     total_final_sum = 0
     current_row = 2
     current_order_id = None
+    total_viewer_sum = 0
     order_start_row = current_row
 
     for order in sales_data:
         if current_order_id != order['id']:
             items = order['items']
-            total_sale_price = sum(float(item.get('sale_price', 0)) for item in items)
+            total_sale_price = 0
+            viewer_payment = 0
+
+            if order.get('viewer_name'):
+                # Если есть показывающий, используем разделение цен
+                total_sale_price = order['main_products_price']
+                viewer_payment = order['additional_products_price']
+            else:
+                # Если показывающего нет, считаем общую сумму
+                total_sale_price = sum(float(item.get('sale_price', 0)) for item in items)
+
 
             # if len(items) == 1:
             #     # Для одного продукта - одна строка
@@ -152,11 +165,13 @@ def generate_detailed_sales_report(start_date, end_date, filename="detailed_sale
                 "",
                 OrderTypeRu[order['status'].upper()].value,
                 f"{order['manager_name']} ({order['manager_username']})",
+                f"{order['viewer_name']} ({order['viewer_username']})" if order['viewer_name'] else "",
                 f"{order['packer_name']} ({order['packer_username']})" if order['packer_name'] else "",
                 get_courier_info(order),
                 order.get('note', ''),
                 order.get('delivery_note', ''),
                 total_sale_price,
+                viewer_payment,
                 calculate_packing_cost(order),
                 order.get('total_price', 0),
                 order.get('delivery_price', 0),
@@ -196,9 +211,11 @@ def generate_detailed_sales_report(start_date, end_date, filename="detailed_sale
                     repacking_reason,
                     OrderTypeRu[order['status'].upper()].value,  # Дублируем статус заказа
                     f"{order['manager_name']} ({order['manager_username']})",  # Дублируем менеджера
+                    f"{order['viewer_name']} ({order['viewer_username']})" if order['viewer_name'] else "",
                     f"{order['packer_name']} ({order['packer_username']})" if order.get('packer_name') else "",
                     # Дублируем упаковщика
                     get_courier_info(order),  # Дублируем курьера
+                    "",
                     "",
                     "",
                     "",
@@ -254,7 +271,7 @@ def generate_detailed_sales_report(start_date, end_date, filename="detailed_sale
     # Настраиваем фильтры, исключая определенные столбцы
     filter_columns = list(range(1, len(headers) + 1))
     # Исключаем колонки с заметками и суммами
-    exclude_columns = [8, 13, 14, 15, 16, 17, 18, 19]  # Индексы колонок для исключения из фильтрации
+    exclude_columns = [8, 15, 16, 17, 18, 19, 20, 21] # Индексы колонок для исключения из фильтрации
     filter_columns = [col for col in range(1, len(headers) + 1) if col not in exclude_columns]
 
     # Применяем фильтры только к нужным колонкам
@@ -268,6 +285,7 @@ def generate_detailed_sales_report(start_date, end_date, filename="detailed_sale
         f'=SUMPRODUCT(SUBTOTAL(3,OFFSET({get_correct_column_letter("main_products")}2,ROW({get_correct_column_letter("main_products")}2:{get_correct_column_letter("main_products")}{current_row})-ROW({get_correct_column_letter("main_products")}2),0)),'
         f'--({get_correct_column_letter("main_products")}2:{get_correct_column_letter("main_products")}{current_row}="Да"))'
     )
+    viewer_payment_formula = f'=SUBTOTAL(9,{get_correct_column_letter("viewer_payment")}2:{get_correct_column_letter("viewer_payment")}{current_row})'
     manager_payment_formula = f'=SUBTOTAL(9,{get_correct_column_letter("manager_payment")}2:{get_correct_column_letter("manager_payment")}{current_row})'
     packer_payment_formula = f'=SUBTOTAL(9,{get_correct_column_letter("packer_payment")}2:{get_correct_column_letter("packer_payment")}{current_row})'
     sales_sum_formula = f'=SUBTOTAL(9,{get_correct_column_letter("sale_sum")}2:{get_correct_column_letter("sale_sum")}{current_row})'
@@ -278,6 +296,7 @@ def generate_detailed_sales_report(start_date, end_date, filename="detailed_sale
     summary_rows = [
         ("Всего основных продуктов:", main_products_formula),
         ("Сумма оплаты менеджерам:", manager_payment_formula),
+        ("Сумма оплаты показавшим:", viewer_payment_formula),
         ("Сумма оплаты упаковщикам:", packer_payment_formula),
         ("Сумма продаж итоговая:", sales_sum_formula),
         ("Сумма доставки итоговая:", delivery_sum_formula),
@@ -326,12 +345,13 @@ def generate_detailed_sales_report(start_date, end_date, filename="detailed_sale
 def get_correct_column_letter(column_name):
     """Получаем правильную букву колонки для каждого типа данных"""
     columns = {
-        'main_products': 'F',      # Основные продукты
-        'manager_payment': 'Q',    # Оплата менеджеру
-        'packer_payment': 'R',     # Оплата упаковщику
-        'sale_sum': 'S',          # Сумма продажи
-        'delivery_sum': 'T',       # Сумма доставки
-        'total_sum': 'U'          # Итоговая сумма
+        'main_products': 'F',  # Основные продукты
+        'manager_payment': 'R',  # Оплата менеджеру
+        'viewer_payment': 'S',  # Оплата показавшему
+        'packer_payment': 'T',  # Оплата упаковщику
+        'sale_sum': 'U',  # Сумма продажи
+        'delivery_sum': 'V',  # Сумма доставки
+        'total_sum': 'W'  # Итоговая сумма
     }
     return columns.get(column_name)
 
@@ -397,7 +417,8 @@ def get_detailed_order_data(start_date, end_date):
                              'sale_price', p.sale_price  
                         )
                     ) as items_info,
-                     SUM(p.sale_price) as total_sale_price  
+                    SUM(CASE WHEN p.is_main_product THEN p.sale_price ELSE 0 END) as main_products_price,
+                    SUM(CASE WHEN NOT p.is_main_product THEN p.sale_price ELSE 0 END) as additional_products_price
                 FROM order_items oi
                 JOIN products p ON oi.product_id = p.id
                 JOIN product_params pp ON oi.product_param_id = pp.id
@@ -414,7 +435,7 @@ def get_detailed_order_data(start_date, end_date):
                 LEFT JOIN order_items oi ON o.id = oi.order_id
                 LEFT JOIN trip_items ti ON oi.id = ti.order_item_id
                 LEFT JOIN courier_trips ct ON ti.trip_id = ct.id
-                LEFT JOIN users cu ON o.courier_id = cu.id  -- Изменено на прямую связь с orders
+                LEFT JOIN users cu ON o.courier_id = cu.id
                 LEFT JOIN delivery_zones dz ON ct.zone_id = dz.id
                 GROUP BY o.id, ct.total_price, cu.name, cu.username, dz.name
             )
@@ -430,10 +451,14 @@ def get_detailed_order_data(start_date, end_date):
                 o.packed_boxes_count,
                 m.name as manager_name,
                 m.username as manager_username,
-                p.name as packer_name,        -- Добавляем упаковщика
+                p.name as packer_name,
                 p.username as packer_username,
+                v.name as viewer_name,
+                v.username as viewer_username,
                 tp.title as type_product_name,
                 oi.items_info,
+                oi.main_products_price,
+                oi.additional_products_price,
                 di.delivery_price,
                 di.courier_name,
                 di.courier_username,
@@ -441,7 +466,8 @@ def get_detailed_order_data(start_date, end_date):
                 di.zone_name
             FROM orders o
             JOIN users m ON o.manager_id = m.id
-            LEFT JOIN users p ON o.packer_id = p.id  -- Добавляем связь с упаковщиком
+            LEFT JOIN users p ON o.packer_id = p.id
+            LEFT JOIN users v ON o.viewer_id = v.id
             JOIN order_items oit ON o.id = oit.order_id
             JOIN products p_prod ON oit.product_id = p_prod.id
             JOIN type_product tp ON p_prod.type_id = tp.id
@@ -452,8 +478,10 @@ def get_detailed_order_data(start_date, end_date):
                 o.id, o.created_at, o.order_type, o.status, o.note,
                 o.total_price, o.delivery_address, o.delivery_note, o.packed_boxes_count,
                 m.name, m.username, 
-                p.name, p.username,  -- Добавляем в GROUP BY
+                p.name, p.username,
+                v.name, v.username,
                 tp.title, oi.items_info,
+                oi.main_products_price, oi.additional_products_price,
                 di.delivery_price, di.courier_name, di.courier_username,
                 o.delivery_sum, di.zone_name
             ORDER BY o.created_at DESC
@@ -477,11 +505,15 @@ def get_detailed_order_data(start_date, end_date):
                     'manager_username': row[10],
                     'packer_name': row[11],
                     'packer_username': row[12],
-                    'type_product_name': row[13],
-                    'items': row[14] if isinstance(row[14], list) else [],
-                    'delivery_price': row[15] or row[18],  # Используем delivery_sum если нет delivery_price
-                    'courier_name': row[16],
-                    'courier_username': row[17]
+                    'viewer_name': row[13],
+                    'viewer_username': row[14],
+                    'type_product_name': row[15],
+                    'items': row[16] if isinstance(row[16], list) else [],
+                    'main_products_price': row[17] or 0,
+                    'additional_products_price': row[18] or 0,
+                    'delivery_price': row[19] or row[22],  # Используем delivery_sum если нет delivery_price
+                    'courier_name': row[20],
+                    'courier_username': row[21]
                 }
                 results.append(order_dict)
 

@@ -36,7 +36,7 @@ def format_order_message(order_id, product_list, gift, note, sale_type,
                          manager_name, manager_username, delivery_date=None,  show_item_status=False,
                          delivery_time=None, delivery_address=None, delivery_note=None,zone_name=None,
                          contact_phone=None, contact_name=None, total_price=None, avito_boxes=None,hide_track_prices=False,
-                         packer_name=None, packer_username=None,):
+                         packer_name=None, packer_username=None,viewer_name=None, viewer_username=None):
     """
     Форматирует сообщение о заказе с учетом типа продажи
 
@@ -57,6 +57,8 @@ def format_order_message(order_id, product_list, gift, note, sale_type,
         contact_name: Имя контакта (для доставки)
         total_price: Общая сумма
         avito_boxes: Количество мешков для Avito
+         viewer_name: Имя показывающего (для прямых продаж)
+        viewer_username: Username показывающего (для прямых продаж)
     """
     formatted_order_id = str(order_id).zfill(4)
     print(formatted_order_id)
@@ -65,7 +67,7 @@ def format_order_message(order_id, product_list, gift, note, sale_type,
 
     order_parts = [
         f"📋 Заказ #{formatted_order_id}ㅤ\n",
-        f"🏷️ Тип продажи: {SaleTypeRu[sale_type.upper()].value}",
+        f"🏷️ Тип продажи: {SaleTypeRu[sale_type.upper()].value}{'(Показ)' if sale_type == 'direct' and viewer_name else ''}",
         ""
     ]
     # Добавляем информацию о продуктах в зависимости от типа продажи
@@ -146,7 +148,8 @@ def format_order_message(order_id, product_list, gift, note, sale_type,
     # Добавляем информацию о менеджере
     order_parts.append(f"🧑‍💻 Менеджер: {manager_name} ({manager_username})\n")
     order_parts.append(f"🧑‍💻 Упаковщик: {manager_name} ({manager_username})\n") if packer_name and packer_username else ''
-
+    if sale_type == SaleType.DIRECT.value and viewer_name and viewer_username:
+        order_parts.append(f"🏪 Показал: {viewer_name} ({viewer_username})")
     # Собираем все части сообщения, фильтруя пустые строки
     return '\n'.join(filter(None, order_parts))
 
@@ -199,6 +202,7 @@ def format_order_message_for_courier(order):
     contact_phone = order.get('contact_phone')
     contact_name = order.get('contact_name')
     total_price = order.get('total_price')
+
 
     product_name, product_param = get_product_info(product_id, product_param_id)
     formatted_order_id = str(order_id).zfill(4)

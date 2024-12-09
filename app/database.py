@@ -164,7 +164,7 @@ def get_product_params(product_id):
 def create_order(product_dict, gift, note, sale_type, manager_id, message_id,
                  avito_photos_tracks=None, packer_id=None, status_order=OrderType.ACTIVE.value,
                  delivery_date=None, delivery_time=None, delivery_address=None,
-                 delivery_note=None, contact_phone=None, contact_name=None, total_price=None):
+                 delivery_note=None, contact_phone=None, contact_name=None, total_price=None,viewer_id=None):
     """
     Создает новый заказ в базе данных
 
@@ -184,16 +184,17 @@ def create_order(product_dict, gift, note, sale_type, manager_id, message_id,
                         gift, note, order_type, manager_id, message_id, packer_id,
                         status, delivery_date, delivery_time, delivery_address,
                         delivery_note, contact_phone, contact_name, total_price,
-                        avito_boxes_count, created_at
+                        avito_boxes_count,viewer_id, created_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,%s, NOW())
                     RETURNING id;
                 """
                 cursor.execute(order_query, (
                     gift, note, sale_type, manager_id, message_id, packer_id,
                     status_order, delivery_date, delivery_time, delivery_address,
                     delivery_note, contact_phone, contact_name, total_price,
-                    len(avito_photos_tracks) if avito_photos_tracks else 0
+                    len(avito_photos_tracks) if avito_photos_tracks else 0,
+                    viewer_id
                 ))
                 order_id = cursor.fetchone()[0]
                 print(2)
@@ -2575,3 +2576,62 @@ def get_packing_info(order_id, tracking_number):
                     return packing_status, repacking_reason
             else:
                 return '', ''
+
+
+def create_showroom_visit(manager_id: int, viewer_id: int, note: str) -> int:
+    """Creates new showroom visit"""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO showroom_visits (manager_id, viewer_id, note)
+                VALUES (%s, %s, %s)
+                RETURNING id
+            """, (manager_id, viewer_id, note))
+            return cursor.fetchone()[0]
+
+
+def get_showroom_visit(visit_id: int) -> dict:
+    """Gets showroom visit info"""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT sv.*, 
+                       m.name as manager_name, m.username as manager_username,
+                       v.name as viewer_name, v.username as viewer_username
+                FROM showroom_visits sv
+                JOIN users m ON sv.manager_id = m.id
+                JOIN users v ON sv.viewer_id = v.id
+                WHERE sv.id = %s
+            """, (visit_id,))
+            row = cursor.fetchone()
+            return dict(zip([desc[0] for desc in cursor.description], row)) if row else None
+
+
+def get_active_showroom_visits(username: str) -> list:
+    """Gets active showroom visits for user"""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT sv.*, 
+                       m.name as manager_name, m.username as manager_username
+                FROM showroom_visits sv
+                JOIN users m ON sv.manager_id = m.id
+                JOIN users v ON sv.viewer_id = v.id
+                WHERE v.username = %s 
+                AND sv.status = 'active'
+            """, (f"@{username}" if not username.startswith('@') else username,))
+
+            columns = [desc[0] for desc in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def update_showroom_visit_status(visit_id: int, status: str) -> None:
+    """Updates showroom visit status"""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                UPDATE showroom_visits 
+                SET status = %s,
+                    completed_at = CASE WHEN %s = 'completed' THEN NOW() ELSE NULL END
+                WHERE id = %s
+            """, (status, status, visit_id))

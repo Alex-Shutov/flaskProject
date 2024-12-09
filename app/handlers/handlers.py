@@ -48,6 +48,9 @@ def review_order_data(chat_id, state: StateContext,prev_message=None):
     """
     with state.data() as data:
         # Получаем базовые данные заказа
+        original_manager_id = data.get('original_manager_id',None)
+        original_manager_name = data.get('original_manager_name',None)
+        original_manager_username = data.get('original_manager_username',None)
         sale_type = data.get('sale_type')
         product_dict = data.get('product_dict', {})
         gift = data.get('gift', 'Без подарка')
@@ -78,7 +81,7 @@ def review_order_data(chat_id, state: StateContext,prev_message=None):
                             })
         # Формируем основной текст заказа
         order_summary = ["📦 Предпросмотр заказа:"]
-        order_summary.append(f"\nТип продажи: {SaleTypeRu[sale_type.upper()].value}")
+        order_summary.append(f"\nТип продажи: {SaleTypeRu[sale_type.upper()].value}{'(Показ)' if sale_type == 'direct' and original_manager_id else ''}")
         # Добавляем информацию о продуктах
 
         if sale_type == "avito":
@@ -110,6 +113,8 @@ def review_order_data(chat_id, state: StateContext,prev_message=None):
             f"📝 Заметка: {note}",
             packer_info
         ])
+        if sale_type == "direct" and original_manager_id is not None:
+            order_summary.append(f"\n👤 Менеджер: {original_manager_name} {original_manager_username}\n")
         if sale_type != 'avito':
             order_summary.append(f'\n💰 Сумма заказа: {total_price} руб.')
         # Добавляем специфичную информацию по типу заказа
@@ -129,6 +134,7 @@ def review_order_data(chat_id, state: StateContext,prev_message=None):
                 f"📞 Телефон: {data.get('contact_phone')}"
             ]
             order_summary.extend(delivery_info)
+
 
         # Формируем клавиатуру для подтверждения
         markup = types.InlineKeyboardMarkup()

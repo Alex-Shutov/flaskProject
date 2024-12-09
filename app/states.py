@@ -1,4 +1,5 @@
 from telebot.states import State, StatesGroup
+
 class DirectStates(StatesGroup):
     type_product=State()       # выбор типа продукта
     product_id = State()       # выбор продукта
@@ -11,6 +12,8 @@ class DirectStates(StatesGroup):
     product_dict=State()
     is_need_packing=State()
     total_price = State()
+    viewer_selection = State()
+    viewer_note = State()
 
 
 class AvitoStates(StatesGroup):

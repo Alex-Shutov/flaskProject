@@ -42,6 +42,10 @@ from database import get_setting_value
 
 from database import check_packing_before_order
 
+from database import get_all_users, get_user_info_by_id, get_active_showroom_visits, update_showroom_visit_status, \
+    get_showroom_visit, create_showroom_visit
+
+
 # Инициализация хранилища состояний
 bot = get_bot_instance()
 
@@ -54,7 +58,7 @@ def handle_sale(message, state: StateContext):
     # Начинаем с выбора типа продажи
     state.set(SaleStates.sale_type)
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("Прямая", callback_data="sale_direct"))
+    markup.add(types.InlineKeyboardButton("Прямая", callback_data="select_viewer"))
     markup.add(types.InlineKeyboardButton("Доставка", callback_data="sale_delivery"))
     markup.add(types.InlineKeyboardButton("Авито", callback_data="sale_avito"))
     bot.send_message(chat_id, "Выберите тип продажи:", reply_markup=markup)
@@ -62,7 +66,9 @@ def handle_sale(message, state: StateContext):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('sale_'), state=SaleStates.sale_type)
 def handle_sale_type(call: types.CallbackQuery, state: StateContext):
-    sale_type = call.data.split('_')[1]
+    with state.data() as data:
+        sale_type_state = data.get('sale_type', None)
+    sale_type =  call.data.split('_')[1] if not sale_type_state else sale_type_state
     state.add_data(sale_type=sale_type)
 
     # Переходим к выбору типа продукта
@@ -329,10 +335,15 @@ def finalize_order(chat_id, username, message_id, state: StateContext):
             product_dict = order_data.get("product_dict")
             param_id = order_data.get("param_id")
             product_id = order_data.get("product_id")
+            original_manager_id = order_data.get("original_manager_id",None)
+            original_manager_name = order_data.get("original_manager_name",None)
+            original_manager_username = order_data.get("original_manager_username",None)
+            visit_id = order_data.get("visit_id",None)
             gift = order_data.get("gift")
             note = order_data.get("note")
             sale_type = order_data.get("sale_type")
             total_price = order_data.get("total_price")
+            viewer_id = order_data.get("viewer_id")
 
             if not all([product_dict, sale_type]):
                 bot.send_message(chat_id, "Не хватает данных для оформления заказа. Пожалуйста, начните процесс заново.")
@@ -343,6 +354,9 @@ def finalize_order(chat_id, username, message_id, state: StateContext):
                 if not manager_info:
                     bot.send_message(chat_id, "Не удалось получить информацию о менеджере.")
                     return
+                viewer_info = None
+                if viewer_id:
+                    viewer_info = get_user_info_by_id(viewer_id)
                 print(manager_info)
                 print('manager_info')
                 manager_id = manager_info['id']
@@ -353,6 +367,7 @@ def finalize_order(chat_id, username, message_id, state: StateContext):
 
                 # Создаем основной заказ
                 order = create_order(product_dict, gift, note, sale_type, manager_id, message_id,
+                                     viewer_id=viewer_id,
                                         total_price=total_price)
                 # Добавляем все товары в order_items
                 # for i, product_id in enumerate(product_ids):
@@ -366,12 +381,14 @@ def finalize_order(chat_id, username, message_id, state: StateContext):
                 #     create_order_items(order_id, product_id, product_name, product_values, is_main_product)
                 update_order_status(order['id'],OrderType.CLOSED.value)
                 order_message = format_order_message(
-                    order['id'], order['values']['general'], gift, note, sale_type, manager_name, manager_username, total_price=total_price
+                    order['id'], order['values']['general'], gift, note, sale_type, manager_name if not viewer_info else original_manager_name, manager_username if not viewer_info else original_manager_username, total_price=total_price,  viewer_name=viewer_info['name'] if viewer_info else None,
+                    viewer_username=viewer_info['username'] if viewer_info else None,
                 )
                 bot.send_message(chat_id, order_message)
                 reply_message_id = bot.send_message(CHANNEL_CHAT_ID, order_message)
                 update_order_message_id(order['id'],reply_message_id.message_id)
 
+                update_showroom_visit_status(visit_id, 'completed') if not visit_id else None
 
                 # Удаляем состояние после завершения заказа
                 state.delete()
@@ -413,29 +430,123 @@ def show_sold_orders(call: types.CallbackQuery, state: StateContext):
 #     )
 #     bot.send_message(message.chat.id, "Выберите тип заказов:", reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: call.data == "cancel_order")
-def handle_cancel_order(call: types.CallbackQuery, state: StateContext):
-    """
-    Обработчик отмены заказа.
-    Полностью сбрасывает состояние и начинает процесс оформления заново.
-    """
-    # Удаляем текущее состояние
-    state.delete()
 
-    # Начинаем процесс заново
-    message_id = call.message.message_id
-    chat_id = call.message.chat.id
+@bot.callback_query_handler(func=lambda call: call.data == 'select_viewer', state=SaleStates.sale_type)
+def handle_direct_sale(call: types.CallbackQuery, state: StateContext):
+    """Handler for direct sales - shows viewer selection"""
+    users = get_all_users()
 
-    # Удаляем сообщение с подтверждением заказа
-    bot.delete_message(chat_id, message_id)
-
-    # Начинаем с выбора типа продажи
-    state.set(SaleStates.sale_type)
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("Прямая", callback_data="sale_direct"))
-    markup.add(types.InlineKeyboardButton("Доставка", callback_data="sale_delivery"))
-    markup.add(types.InlineKeyboardButton("Авито", callback_data="sale_avito"))
 
-    bot.send_message(chat_id, "Выберите тип продажи:\n\n", reply_markup=markup)
+    # Создаем временный список для хранения кнопок
+    buttons = []
+    for user in users:
+        btn_text = f"{user['name']}"
+        buttons.append(types.InlineKeyboardButton(btn_text, callback_data=f"viewer_{user['id']}"))
+
+    # Добавляем кнопки попарно
+    for i in range(0, len(buttons), 2):
+        if i + 1 < len(buttons):
+            # Если есть пара кнопок, добавляем обе
+            markup.row(buttons[i], buttons[i + 1])
+        else:
+            # Если осталась одна кнопка, добавляем её одну
+            markup.row(buttons[i])
+
+    # Добавляем кнопку "Пропустить" отдельной строкой на всю ширину
+    markup.row(types.InlineKeyboardButton("Пропустить", callback_data="sale_direct"))
+
+    bot.edit_message_text(
+        "Выберите, кто будет показывать товары в шоуруме:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+    state.set(SaleStates.sale_type)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('viewer_'))
+def handle_viewer_selection(call: types.CallbackQuery, state: StateContext):
+    """Handles viewer selection and note input"""
+    viewer_id = int(call.data.split('_')[1])
+    state.add_data(viewer_id=viewer_id)
+
+    bot.edit_message_text(
+        "Введите заметку для показывающего:",
+        call.message.chat.id,
+        call.message.message_id
+    )
+    state.set(SaleStates.viewer_note)
+
+
+@bot.message_handler(state=SaleStates.viewer_note)
+def handle_viewer_note(message: types.Message, state: StateContext):
+    if not is_valid_command(message.text, state):
+        return
+    """Handles viewer note and creates showroom visit"""
+    with state.data() as data:
+        viewer_id = data['viewer_id']
+        viewer_info = get_user_info_by_id(viewer_id)
+        manager_info = get_user_info(message.from_user.username)
+
+        # Create showroom visit
+        visit_id = create_showroom_visit(
+            manager_id=manager_info['id'],
+            viewer_id=viewer_id,
+            note=message.text
+        )
+        # Notify manager
+        bot.reply_to(message,
+                     f"Просмотр зарегистрирован за {viewer_info['name']} ({viewer_info['username']})")
+
+        # Notify viewer
+        viewer_markup = types.InlineKeyboardMarkup(row_width=1)
+        viewer_markup.add(
+            types.InlineKeyboardButton("Оформить продажу", callback_data=f"complete_visit_{visit_id}"),
+            types.InlineKeyboardButton("Отказались от покупки", callback_data=f"cancel_visit_{visit_id}")
+        )
+
+        bot.send_message(
+            viewer_info['telegram_id'],
+            f"Менеджер {manager_info['name']} ({manager_info['username']}) зарегистрировал на вас просмотр\n\n"
+            f"Заметка от менеджера:\n{message.text}\n\n"
+            "После того, как покупатель выберет товары, нажмите на Оформить продажу\n\n"
+            "Если покупатель отказался от покупки, нажмите на 'Отказались от покупки'",
+            reply_markup=viewer_markup
+        )
+        state.delete()
+
+
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('complete_visit_'))
+def handle_complete_visit(call: types.CallbackQuery, state: StateContext):
+    """Handles completion of showroom visit"""
+    visit_id = int(call.data.split('_')[2])
+    visit_info = get_showroom_visit(visit_id)
+
+    state.add_data(
+        sale_type ='direct',
+        original_manager_id = visit_info['manager_id'],
+        original_manager_name=visit_info['manager_name'],
+        original_manager_username=visit_info['manager_username'],
+        viewer_id =visit_info['viewer_id']
+    )
+
+    handle_sale_type(call, state)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_visit_'))
+def handle_cancel_visit(call: types.CallbackQuery, state: StateContext):
+    """Handles cancellation of showroom visit"""
+    visit_id = int(call.data.split('_')[2])
+    update_showroom_visit_status(visit_id, 'cancelled')
+
+    bot.edit_message_reply_markup(
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=None
+    )
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    bot.answer_callback_query(call.id, "Продажа отменена((((")
 
 

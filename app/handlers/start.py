@@ -62,6 +62,15 @@ from database import get_order_packing_status
 
 from database import update_order_packing_stats
 
+from database import get_showroom_visit
+
+from utils import is_valid_command
+
+from database import get_active_showroom_visits
+
+from handlers.handlers import delete_multiple_states
+from states import DirectStates
+
 bot = get_bot_instance()
 
 @bot.message_handler(commands=['restart'])
@@ -113,8 +122,9 @@ def start(message,state:StateContext):
     bot.send_message(message.chat.id, f"Если вдруг у вас случилась ошибка, вот ваши действия\n1\. Перезагрузить бота\(кнопка в меню\)\. Для корректной работы может потребоваться *нажать 2 раза*\n2\. Если ошибка не ушла, написать команду *\/start* в чат с ботом\.\n3\. Обратиться ко мне за помощью, @ni3omi\(Леша\)", parse_mode='MarkdownV2')
 
 @bot.message_handler(func=lambda message: message.text == '#Заказы')
+
 def handle_orders(message: types.Message, state: StateContext):
-    print(state)
+
     user_info = get_user_by_username(message.from_user.username, state)  # Получаем информацию о пользователе
 
     markup = types.InlineKeyboardMarkup()
@@ -122,6 +132,7 @@ def handle_orders(message: types.Message, state: StateContext):
     markup.add(types.InlineKeyboardButton("История заказов", callback_data='orders_show_history'))
     # markup.add(types.InlineKeyboardButton("Взять в упаковку", callback_data='orders_pack_goods'))
     markup.add(types.InlineKeyboardButton("Упаковка товара", callback_data='orders_pack'))
+    markup.add(types.InlineKeyboardButton("Продажи в шоуруме", callback_data='orders_show_showroom'))
 
     # Дополнительные кнопки для курьеров
 
@@ -1170,3 +1181,95 @@ def confirm_final_order(call: types.CallbackQuery, state: StateContext):
         finalize_order(call.message.chat.id, call.from_user.username, call.message.message_id, state)
 
     bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'orders_show_showroom')
+def show_showroom_orders(call: types.CallbackQuery, state: StateContext):
+    """Shows active showroom visits for user"""
+    visits = get_active_showroom_visits(call.from_user.username)
+
+    if not visits:
+        bot.answer_callback_query(call.id, "Нет активных заявок на показ")
+        return
+
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for visit in visits:
+        button_text = f"⏳ {visit['created_at'].strftime('%d.%m.%Y')} - {visit['manager_name']}"
+        markup.add(types.InlineKeyboardButton(
+            button_text,
+            callback_data=f"show_visit_{visit['id']}"
+        ))
+
+    bot.edit_message_text(
+        "Активные заявки на показ:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('show_visit_'))
+def handle_visit_selection(call: types.CallbackQuery, state: StateContext):
+    """Handles showroom visit selection"""
+    with state.data() as data:
+        origin_visit_id = data.get('visit_id',None)
+    visit_id = int(call.data.split('_')[2]) if not origin_visit_id else origin_visit_id
+    visit_info = get_showroom_visit(visit_id)
+
+    if not visit_info:
+        bot.answer_callback_query(call.id, "Заявка не найдена")
+        return
+    state.add_data(visit_id=visit_id)
+    viewer_markup = types.InlineKeyboardMarkup(row_width=1)
+    viewer_markup.add(
+        types.InlineKeyboardButton("Оформить продажу", callback_data=f"complete_visit_{visit_id}"),
+        types.InlineKeyboardButton("Отказались от покупки", callback_data=f"cancel_visit_{visit_id}"),
+        types.InlineKeyboardButton("« Назад", callback_data="orders_show_showroom")
+    )
+
+    message_text = (
+        f"📅 Дата создания: {visit_info['created_at'].strftime('%d.%m.%Y')}\n"
+        f"👤 Менеджер: {visit_info['manager_name']} ({visit_info['manager_username']})\n"
+        f"👥 Покажет: {visit_info['viewer_name']} ({visit_info['viewer_username']})\n\n"
+        f"📝 Заметка от менеджера:\n{visit_info['note']}"
+    )
+
+    bot.edit_message_text(
+        message_text,
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=viewer_markup
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == "cancel_order")
+def handle_cancel_order(call: types.CallbackQuery, state: StateContext):
+    """
+    Обработчик отмены заказа.
+    Полностью сбрасывает состояние и начинает процесс оформления заново.
+    """
+    with state.data() as data:
+        origin_manager_id = data.get('original_manager_id',None)
+        visit_id = data.get('visit_id',None)
+    # Удаляем текущее состояние
+
+    # Начинаем процесс заново
+    message_id = call.message.message_id
+    chat_id = call.message.chat.id
+
+    # Удаляем сообщение с подтверждением заказа
+    if origin_manager_id and visit_id:
+        handle_visit_selection(call,state)
+        delete_multiple_states(state,['product_dict','original_manager_id','original_manager_name','original_manager_username'])
+        return
+    bot.delete_message(chat_id, message_id)
+
+    # Начинаем с выбора типа продажи
+    state.delete()
+
+    state.set(DirectStates.sale_type)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("Прямая", callback_data="sale_direct"))
+    markup.add(types.InlineKeyboardButton("Доставка", callback_data="sale_delivery"))
+    markup.add(types.InlineKeyboardButton("Авито", callback_data="sale_avito"))
+
+    bot.send_message(chat_id, "Выберите тип продажи:\n\n", reply_markup=markup)
+
