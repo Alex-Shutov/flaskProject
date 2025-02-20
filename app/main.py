@@ -223,7 +223,7 @@ if __name__ == '__main__':
     if webhook_info.url or not DEBUG:
         logger.info(f"Bot is running in webhook mode: {webhook_info.url}")
         if SSL_CERT and SSL_PRIV:
-            logger.log(SSL_CERT,SSL_PRIV)
+            logger.info(f"Cert: {SSL_CERT},\nPriv: {SSL_PRIV}")
             app.run(
                 host=SERVER_HOST,
                 port=SERVER_PORT,
