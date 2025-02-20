@@ -220,14 +220,26 @@ if __name__ == '__main__':
     webhook_info = bot.get_webhook_info()
     logger.info('Checking webhook info...')
 
-    if webhook_info.url:
+    if webhook_info.url or not DEBUG:
         logger.info(f"Bot is running in webhook mode: {webhook_info.url}")
+        if SSL_CERT and SSL_PRIV:
+            app.run(
+                host=SERVER_HOST,
+                port=SERVER_PORT,
+                debug=True
+                )
+        else:
+            app.run(
+                host=SERVER_HOST,
+                port=SERVER_PORT,
+                ssl_context=(SSL_CERT, SSL_PRIV),
+                debug=False
+            )
+    else:
+        logger.info("No webhook set. Starting bot in polling mode...")
         app.run(
             host=SERVER_HOST,
             port=SERVER_PORT,
-            ssl_context=(SSL_CERT, SSL_PRIV),
             debug=False
         )
-    else:
-        logger.info("No webhook set. Starting bot in polling mode...")
         bot.polling(none_stop=True)

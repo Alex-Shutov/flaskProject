@@ -23,8 +23,8 @@ REDIS_DB = int(os.getenv('REDIS_DB', 0))
 REDIS_PASSWORD=os.getenv('REDIS_PASSWORD',None)
 
 SECRET_TOKEN=os.getenv('SECRET_TOKEN')
-SSL_CERT = os.getenv('SSL_CERT', '/path/to/cert.pem')
-SSL_PRIV = os.getenv('SSL_PRIV', '/path/to/privkey.pem')
+SSL_CERT = os.getenv('SSL_CERT', None)
+SSL_PRIV = os.getenv('SSL_PRIV', None)
 SERVER_HOST = os.getenv('SERVER_HOST', '0.0.0.0')
 SERVER_PORT = int(os.getenv('SERVER_PORT', 8443))
 
@@ -45,7 +45,7 @@ WEBHOOK_URL = f"{WEBHOOK_HOST}:{WEBHOOK_PORT}/"
 
 
 # Flask settings
-DEBUG = os.getenv('DEBUG', 'False').lower() == 'True'
+DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 PORT = int(os.getenv('PORT'))
 
 WAREHOUSE_LOCATION = {
