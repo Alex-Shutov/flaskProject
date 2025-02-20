@@ -58,6 +58,7 @@ def review_order_data(chat_id, state: StateContext,prev_message=None):
         packer_id = data.get('pack_id')
         user_info = data.get('user_info')
         total_price = data.get('total_price', 'Не указана')
+        delivery_sum = data.get('delivery_sum', None)
         print(data,'data')
         # Группируем продукты по трек-номерам для Авито
 
@@ -117,6 +118,9 @@ def review_order_data(chat_id, state: StateContext,prev_message=None):
             order_summary.append(f"\n👤 Менеджер: {original_manager_name} {original_manager_username}\n")
         if sale_type != 'avito':
             order_summary.append(f'\n💰 Сумма заказа: {total_price} руб.')
+            # Добавляем стоимость доставки для СДЭК, ПЭК, ЛУЧ
+            if sale_type in ['sdek', 'pek', 'luch'] and delivery_sum is not None:
+                order_summary.append(f'🚚 Стоимость доставки: {delivery_sum} руб.')
         # Добавляем специфичную информацию по типу заказа
         if sale_type == "avito":
             avito_photos_tracks = data.get('avito_photos_tracks', {})

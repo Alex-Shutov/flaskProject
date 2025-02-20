@@ -10,11 +10,17 @@ class SaleType(Enum):
     DIRECT='direct'
     DELIVERY='delivery'
     AVITO='avito'
+    SDEK = 'sdek'
+    PEK = 'pek'
+    LUCH = 'luch'
 
 class SaleTypeRu(Enum):
     DIRECT='Прямая'
     DELIVERY='Доставка'
     AVITO='Авито'
+    SDEK = 'СДЭК'
+    PEK = 'ПЭК'
+    LUCH = 'ЛУЧ'
 
 class OrderType(Enum):
     ACTIVE='active'

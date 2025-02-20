@@ -36,7 +36,7 @@ def format_order_message(order_id, product_list, gift, note, sale_type,
                          manager_name, manager_username, delivery_date=None,  show_item_status=False,
                          delivery_time=None, delivery_address=None, delivery_note=None,zone_name=None,
                          contact_phone=None, contact_name=None, total_price=None, avito_boxes=None,hide_track_prices=False,
-                         packer_name=None, packer_username=None,viewer_name=None, viewer_username=None):
+                         packer_name=None, packer_username=None,viewer_name=None, viewer_username=None,delivery_sum=None):
     """
     Форматирует сообщение о заказе с учетом типа продажи
 
@@ -122,6 +122,8 @@ def format_order_message(order_id, product_list, gift, note, sale_type,
         order_parts.append(f"\n")
         if total_price:
             order_parts.append(f"💰 Сумма: {total_price} руб.\n")
+        if sale_type in ['sdek', 'pek', 'luch'] and delivery_sum:
+            order_parts.append(f"🚚 Стоимость доставки: {delivery_sum} руб.\n")
 
     # Добавляем подарок, если есть
     if gift:

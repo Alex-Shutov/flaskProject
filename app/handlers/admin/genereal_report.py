@@ -389,10 +389,9 @@ def get_courier_info(order):
 
 
 def calculate_total_sum(order):
-    """Рассчитывает итоговую сумму в зависимости от типа заказа"""
-    total_price = float(order.get('total_price', 0))
-    delivery_price = float(order.get('delivery_price', 0))
-    if order['order_type'] == 'delivery':
+    total_price = float(order.get('total_price', 0) or 0)  # Если None, то 0
+    delivery_price = float(order.get('delivery_price', 0) or 0)  # Если None, то 0
+    if order['order_type'] in ['delivery', 'sdek', 'pek', 'luch']:
         return total_price + delivery_price
     return total_price
 

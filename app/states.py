@@ -12,6 +12,7 @@ class DirectStates(StatesGroup):
     product_dict=State()
     is_need_packing=State()
     total_price = State()
+    delivery_sum = State()
     viewer_selection = State()
     viewer_note = State()
 

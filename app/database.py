@@ -164,7 +164,7 @@ def get_product_params(product_id):
 def create_order(product_dict, gift, note, sale_type, manager_id, message_id,
                  avito_photos_tracks=None, packer_id=None, status_order=OrderType.ACTIVE.value,
                  delivery_date=None, delivery_time=None, delivery_address=None,
-                 delivery_note=None, contact_phone=None, contact_name=None, total_price=None,viewer_id=None):
+                 delivery_note=None, contact_phone=None, contact_name=None, total_price=None,viewer_id=None,delivery_sum=None):
     """
     Создает новый заказ в базе данных
 
@@ -184,9 +184,9 @@ def create_order(product_dict, gift, note, sale_type, manager_id, message_id,
                         gift, note, order_type, manager_id, message_id, packer_id,
                         status, delivery_date, delivery_time, delivery_address,
                         delivery_note, contact_phone, contact_name, total_price,
-                        avito_boxes_count,viewer_id, created_at
+                        avito_boxes_count,viewer_id, created_at,delivery_sum
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,%s, NOW())
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,%s, NOW(), %s)
                     RETURNING id;
                 """
                 cursor.execute(order_query, (
@@ -194,7 +194,7 @@ def create_order(product_dict, gift, note, sale_type, manager_id, message_id,
                     status_order, delivery_date, delivery_time, delivery_address,
                     delivery_note, contact_phone, contact_name, total_price,
                     len(avito_photos_tracks) if avito_photos_tracks else 0,
-                    viewer_id
+                    viewer_id,delivery_sum
                 ))
                 order_id = cursor.fetchone()[0]
                 print(2)
@@ -1499,7 +1499,7 @@ def get_product_with_type(product_id):
 
 
 def get_detailed_orders(start_date, end_date, type_id=None):
-    orders = get_orders(order_type=['avito', 'delivery', 'direct'], status=['closed'], start_date=start_date,
+    orders = get_orders(order_type=['avito', 'delivery', 'direct', 'sdek', 'pek', 'luch'], status=['closed'], start_date=start_date,
                         end_date=end_date)
     print(orders)
     detailed_orders = []
@@ -1549,6 +1549,7 @@ def get_detailed_orders(start_date, end_date, type_id=None):
             'courier_name': f"{courier_name} ({courier_username})",
             'packer_name': f"{packer_name} ({packer_username})",
             'closed_date': order.get('closed_date'),
+            'delivery_sum': order.get('delivery_sum')
         }
         detailed_orders.append(detailed_order)
 

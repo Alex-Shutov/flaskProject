@@ -238,9 +238,9 @@ if __name__ == '__main__':
             )
     else:
         logger.info("No webhook set. Starting bot in polling mode...")
-        app.run(
-            host=SERVER_HOST,
-            port=SERVER_PORT,
-            debug=False
-        )
+        # app.run(
+        #     host=SERVER_HOST,
+        #     port=SERVER_PORT,
+        #     debug=False
+        # )
         bot.polling(none_stop=True)

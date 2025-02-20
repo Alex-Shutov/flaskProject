@@ -57,14 +57,17 @@ def handle_sale(message, state: StateContext):
 
     # Начинаем с выбора типа продажи
     state.set(SaleStates.sale_type)
-    markup = types.InlineKeyboardMarkup()
+    markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(types.InlineKeyboardButton("Прямая", callback_data="select_viewer"))
     markup.add(types.InlineKeyboardButton("Доставка", callback_data="sale_delivery"))
     markup.add(types.InlineKeyboardButton("Авито", callback_data="sale_avito"))
+    markup.add(types.InlineKeyboardButton("СДЭК", callback_data="sale_sdek"))
+    markup.add(types.InlineKeyboardButton("ПЭК", callback_data="sale_pek"))
+    markup.add(types.InlineKeyboardButton("ЛУЧ", callback_data="sale_luch"))
     bot.send_message(chat_id, "Выберите тип продажи:", reply_markup=markup)
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('sale_'), state=SaleStates.sale_type)
+@bot.callback_query_handler(func=lambda call: call.data.startswith('sale_') or call.data in ['sale_sdek', 'sale_pek', 'sale_luch'], state=SaleStates.sale_type)
 def handle_sale_type(call: types.CallbackQuery, state: StateContext):
     with state.data() as data:
         sale_type_state = data.get('sale_type', None)
@@ -203,7 +206,7 @@ def handle_additional_product(call: types.CallbackQuery, state: StateContext):
                 bot.send_message(call.message.chat.id, "Пожалуйста, загрузите фотографию для Авито.")
             elif sale_type == 'delivery':
                 handle_sale_delivery(call,state)
-            elif sale_type == 'direct':
+            elif sale_type in ['direct', 'sdek', 'pek', 'luch']:  # Обработка новых типов
                 state.set(SaleStates.gift)
                 markup = types.InlineKeyboardMarkup()
                 markup.add(types.InlineKeyboardButton("Пропустить", callback_data="skip"))
@@ -244,16 +247,19 @@ def process_gift(message: types.Message, state: StateContext):
 
 
 
-@bot.callback_query_handler( func=lambda call: call.data == 'skip')
+@bot.callback_query_handler(func=lambda call: call.data == 'skip')
 def skip_note(call: types.CallbackQuery, state: StateContext):
     state.add_data(note=None)
     with state.data() as data:
         sale_type = data.get('sale_type')
     if sale_type == 'avito':
         check_packing_requirements(call.message.chat.id, state)
+    elif sale_type in ['sdek', 'pek', 'luch']:  # Для новых типов запрашиваем delivery_sum
+        state.set(SaleStates.delivery_sum)
+        bot.send_message(call.message.chat.id, "Введите стоимость доставки:")
     else:
-        bot.send_message(call.message.chat.id, "Введите общую сумму для заказа")
         state.set(SaleStates.total_price)
+        bot.send_message(call.message.chat.id, "Введите общую сумму для заказа")
 
 @bot.message_handler(state=SaleStates.note, func=lambda message: True)
 def process_note(message: types.Message, state: StateContext):
@@ -263,9 +269,12 @@ def process_note(message: types.Message, state: StateContext):
         sale_type = data.get('sale_type')
     if sale_type == 'avito':
         check_packing_requirements(message.chat.id, state)
+    elif sale_type in ['sdek', 'pek', 'luch']:  # Для новых типов запрашиваем delivery_sum
+        state.set(SaleStates.delivery_sum)
+        bot.send_message(message.chat.id, "Введите стоимость доставки:")
     else:
-        bot.send_message(message.chat.id, "Введите общую сумму")
         state.set(SaleStates.total_price)
+        bot.send_message(message.chat.id, "Введите общую сумму")
 
 
 def check_packing_requirements(chat_id, state: StateContext):
@@ -323,9 +332,9 @@ def handle_total_price(message: types.Message, state: StateContext):
         state.add_data(total_price=total_amount)
         # Завершаем процесс оформления заказа
         review_order_data(message.chat.id, state)
-        # finalize_avito_order(message.chat.id, message.message_id,message.from_user.username, state)
     except ValueError:
         bot.send_message(message.chat.id, "Некорректный формат суммы. Пожалуйста, введите число.")
+
 def finalize_order(chat_id, username, message_id, state: StateContext):
     # Загружаем состояние пользователя через контекстный менеджер
 
@@ -344,6 +353,7 @@ def finalize_order(chat_id, username, message_id, state: StateContext):
             sale_type = order_data.get("sale_type")
             total_price = order_data.get("total_price")
             viewer_id = order_data.get("viewer_id")
+            delivery_sum = order_data.get("delivery_sum")
 
             if not all([product_dict, sale_type]):
                 bot.send_message(chat_id, "Не хватает данных для оформления заказа. Пожалуйста, начните процесс заново.")
@@ -368,7 +378,8 @@ def finalize_order(chat_id, username, message_id, state: StateContext):
                 # Создаем основной заказ
                 order = create_order(product_dict, gift, note, sale_type, manager_id, message_id,
                                      viewer_id=viewer_id,
-                                        total_price=total_price)
+                                        total_price=total_price,
+                delivery_sum = delivery_sum)
                 # Добавляем все товары в order_items
                 # for i, product_id in enumerate(product_ids):
                 #     product_info = get_product_info(product_id)
@@ -381,7 +392,7 @@ def finalize_order(chat_id, username, message_id, state: StateContext):
                 #     create_order_items(order_id, product_id, product_name, product_values, is_main_product)
                 update_order_status(order['id'],OrderType.CLOSED.value)
                 order_message = format_order_message(
-                    order['id'], order['values']['general'], gift, note, sale_type, manager_name if not viewer_info else original_manager_name, manager_username if not viewer_info else original_manager_username, total_price=total_price,  viewer_name=viewer_info['name'] if viewer_info else None,
+                    order['id'], order['values']['general'], gift, note, sale_type, manager_name if not viewer_info else original_manager_name, manager_username if not viewer_info else original_manager_username, total_price=total_price, delivery_sum=delivery_sum,  viewer_name=viewer_info['name'] if viewer_info else None,
                     viewer_username=viewer_info['username'] if viewer_info else None,
                 )
                 bot.send_message(chat_id, order_message)
@@ -550,3 +561,13 @@ def handle_cancel_visit(call: types.CallbackQuery, state: StateContext):
     bot.answer_callback_query(call.id, "Продажа отменена((((")
 
 
+@bot.message_handler(state=SaleStates.delivery_sum)
+def handle_delivery_sum(message: types.Message, state: StateContext):
+    if not is_valid_command(message.text, state): return
+    try:
+        delivery_sum = float(message.text)
+        state.add_data(delivery_sum=delivery_sum)
+        state.set(SaleStates.total_price)  # После delivery_sum переходим к total_price
+        bot.send_message(message.chat.id, "Введите общую сумму для заказа:")
+    except ValueError:
+        bot.send_message(message.chat.id, "Некорректный формат стоимости доставки. Введите число.")

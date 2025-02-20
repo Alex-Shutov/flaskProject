@@ -38,7 +38,7 @@ def generate_sales_report(start_date, end_date, type_id, filename="sales_report.
     sheet_all.title = "Общий отчет"
 
     # Заголовки основных колонок
-    headers = ["ID заказа", "Продукт", "Свойство продукта", "Тип продукта", "Менеджер", "Курьер", "Упаковщик", "Дата продажи"]
+    headers = ["ID заказа", "Продукт", "Свойство продукта", "Тип продукта", "Менеджер", "Курьер", "Упаковщик", "Дата продажи", "Стоимость доставки"]
 
     # Уникальные параметры
     type_columns = set()
@@ -86,7 +86,7 @@ def generate_sales_report(start_date, end_date, type_id, filename="sales_report.
             sale_date = sale_date.strftime('%d.%m.%Y')
 
         # Основные данные строки
-        row = [order_id, product_name, product_param_title, type_name, manager_name, courier_name, packer_name, sale_date]
+        row = [order_id, product_name, product_param_title, type_name, manager_name, courier_name, packer_name, sale_date,order.get('delivery_sum', '-')]
 
         # Добавляем значения параметров
         params = {
