@@ -7,8 +7,8 @@ from datetime import datetime
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='Populate products and product_params tables.')
 parser.add_argument('--type_id', default=1, type=int, help='Type product ID')
-parser.add_argument('--sale_price', default=800, type=int, help='Type product ID')
-parser.add_argument('--avito_delivery_price', default=200, type=int, help='Type product ID')
+parser.add_argument('--sale_price', default=800, type=int, help='Sale price for products')
+parser.add_argument('--avito_delivery_price', default=200, type=int, help='Avito delivery price')
 parser.add_argument('--host', default='localhost', help='Database host')
 parser.add_argument('--database', default='your_database', help='Database name')
 parser.add_argument('--user', default='your_username', help='Database user')
@@ -54,19 +54,20 @@ if not type_result:
     sys.exit(1)
 
 product_type = type_result[0]
-# filtered_products = [p for p in products_inventory if p["type"] == product_type]
-#
-# if not filtered_products:
-#     print(f"Error: No products found for type {product_type}")
-#     sys.exit(1)
 
-# Insert products
+# Get unique product types from the inventory
+unique_product_types = set()
+for product in products_inventory:
+    unique_product_types.add(product["type"])
+
+# Create dictionary to store mapping of product type to product_id
+product_id_map = {}
+
+# Current time for timestamps
 current_time = datetime.now()
 
-# For each product of the specified type, insert into products table
-for product in products_inventory:
-    description = f"{product['name']}"
-
+# First, create entries in the products table for each unique product type
+for product_type_name in unique_product_types:
     product_insert = """
     INSERT INTO products 
     (name, description, created_at, type_id, product_values, param_parameters, 
@@ -75,16 +76,15 @@ for product in products_inventory:
     RETURNING id
     """
 
-    # Set values for insert
+    description = f"{product_type_name}"
     product_values = "{}"  # JSON empty object for now
     param_parameters = "{}"  # JSON empty object for now
     is_main_product = True
-    avito_delivery_price = args.avito_delivery_price  # Default delivery price
     is_available = True
     supplier_id = None
 
     cur.execute(product_insert, (
-        product["name"],
+        product_type_name,  # Name is just the product type (e.g., "Тотем")
         description,
         current_time,
         args.type_id,
@@ -92,33 +92,45 @@ for product in products_inventory:
         param_parameters,
         is_main_product,
         args.sale_price,
-        avito_delivery_price,
+        args.avito_delivery_price,
         is_available,
         supplier_id
     ))
 
     product_id = cur.fetchone()[0]
+    product_id_map[product_type_name] = product_id
 
-    # Insert product_params
+    print(f"Created product entry for {product_type_name} with ID: {product_id}")
+
+# Now, insert the parameters for each product into product_params
+for product in products_inventory:
+    product_type_name = product["type"]
+    product_id = product_id_map[product_type_name]
+
     param_insert = """
     INSERT INTO product_params
     (product_id, title, stock, created_at, param_values, is_available)
     VALUES (%s, %s, %s, %s, %s, %s)
+    RETURNING id
     """
 
     cur.execute(param_insert, (
         product_id,
-        product["param"],
-        product["count"],
+        product["param"],  # The parameter/characteristic (e.g., "механика")
+        product["count"],  # Stock count
         current_time,
         "{}",  # JSON empty object for param_values
         True  # is_available
     ))
 
+    param_id = cur.fetchone()[0]
+    print(f"Created parameter '{product['param']}' for {product_type_name} with ID: {param_id}")
+
 # Commit changes
 conn.commit()
 
-print(f"Successfully inserted {len(products_inventory)} products of type '{product_type}'")
+print(
+    f"Successfully created {len(unique_product_types)} product types and {len(products_inventory)} product parameters")
 
 # Close connection
 cur.close()
