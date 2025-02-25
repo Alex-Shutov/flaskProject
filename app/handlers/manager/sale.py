@@ -562,6 +562,7 @@ def handle_cancel_visit(call: types.CallbackQuery, state: StateContext):
 
 
 @bot.message_handler(state=SaleStates.delivery_sum)
+@bot.message_handler(state=SaleStates.delivery_sum)
 def handle_delivery_sum(message: types.Message, state: StateContext):
     if not is_valid_command(message.text, state): return
     try:
