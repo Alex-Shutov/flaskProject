@@ -85,6 +85,11 @@ def review_order_data(chat_id, state: StateContext,prev_message=None):
         order_summary.append(f"\nТип продажи: {SaleTypeRu[sale_type.upper()].value}{'(Показ)' if sale_type == 'direct' and original_manager_id else ''}")
         # Добавляем информацию о продуктах
 
+        if sale_type in ['sdek', 'pek', 'luch']:
+            courier_photos = data.get('courier_photos', {})
+            if courier_photos:
+                order_summary.append(f"\n📸 Количество фото: {len(courier_photos)}")
+
         if sale_type == "avito":
             total = 0
             print(products_by_tracking)

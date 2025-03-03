@@ -60,6 +60,7 @@ def format_order_message(order_id, product_list, gift, note, sale_type,
          viewer_name: Имя показывающего (для прямых продаж)
         viewer_username: Username показывающего (для прямых продаж)
     """
+
     formatted_order_id = str(order_id).zfill(4)
     print(formatted_order_id)
     # Формируем базовую структуру сообщения
@@ -71,7 +72,29 @@ def format_order_message(order_id, product_list, gift, note, sale_type,
         ""
     ]
     # Добавляем информацию о продуктах в зависимости от типа продажи
-    if sale_type == SaleType.AVITO.value:
+    if sale_type in [SaleType.SDEK.value,SaleType.PEK.value,SaleType.LUCH.value]:
+        for track_number, track_info in product_list.items():
+            for product in track_info:
+                emoji = "📦" if product.get('is_main_product') else "➕"
+                product_line = f"  {emoji} {product['product_name']} - {product['param_title']}"
+
+                if show_item_status:
+                    status = product.get('status', 'pending')
+                    status_emoji = {
+                        'pending': '⏳Ожидает',
+                        'delivered': '✅ Доставлен',
+                        'cancelled': '❌ Отменен',
+                        'refunded': '🔄 Возвращен'
+                    }.get(status, '⏳ Ожидает')
+                    product_line += f" {status_emoji}"
+
+                order_parts.append(product_line)
+            order_parts.append("")  # Пустая строка между трек-номерами
+        order_parts.append(f"\n")
+        order_parts.append(f"💰 Цена доставки: {delivery_sum} руб.\n")
+        order_parts.append(f"💰 Общая сумма: {total_price} руб.\n")
+
+    elif sale_type == SaleType.AVITO.value:
         for track_number, track_info in product_list.items():
             if hide_track_prices:
                 order_parts.append(f"🔹 Трек-номер: {track_number}")

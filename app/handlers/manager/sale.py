@@ -1,3 +1,5 @@
+import uuid
+import time
 from itertools import product
 
 from redis.cluster import command
@@ -45,6 +47,11 @@ from database import check_packing_before_order
 from database import get_all_users, get_user_info_by_id, get_active_showroom_visits, update_showroom_visit_status, \
     get_showroom_visit, create_showroom_visit
 
+from utils import create_media_group
+
+from utils import save_photo_and_resize
+
+from app_types import SaleTypeRu
 
 # Инициализация хранилища состояний
 bot = get_bot_instance()
@@ -562,13 +569,162 @@ def handle_cancel_visit(call: types.CallbackQuery, state: StateContext):
 
 
 @bot.message_handler(state=SaleStates.delivery_sum)
-@bot.message_handler(state=SaleStates.delivery_sum)
 def handle_delivery_sum(message: types.Message, state: StateContext):
     if not is_valid_command(message.text, state): return
     try:
         delivery_sum = float(message.text)
         state.add_data(delivery_sum=delivery_sum)
-        state.set(SaleStates.total_price)  # После delivery_sum переходим к total_price
-        bot.send_message(message.chat.id, "Введите общую сумму для заказа:")
+
+        # After getting delivery sum, ask for photos for SDEK, PEK, LUCH
+        with state.data() as data:
+            sale_type = data.get('sale_type')
+
+        if sale_type in ['sdek', 'pek', 'luch']:
+            # Initialize an empty dict for courier photos
+            state.add_data(courier_photos={})
+
+            # Ask for photos
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("Пропустить", callback_data="skip_courier_photos"))
+            bot.send_message(message.chat.id,
+                             f"Приложите фото для {SaleTypeRu[sale_type.upper()].value} доставки или нажмите 'Пропустить':",
+                             reply_markup=markup)
+            state.set(SaleStates.courier_photo)
+        else:
+            # For other delivery types, proceed to total price
+            state.set(SaleStates.total_price)
+            bot.send_message(message.chat.id, "Введите общую сумму для заказа:")
     except ValueError:
         bot.send_message(message.chat.id, "Некорректный формат стоимости доставки. Введите число.")
+
+
+@bot.message_handler(state=SaleStates.courier_photo, content_types=['photo'])
+def handle_courier_photo(message: types.Message, state: StateContext):
+    chat_id = message.chat.id
+    photo_guid = str(uuid.uuid4())
+
+    try:
+        # Process the photo
+        if message.photo:
+            photo = message.photo[-1]
+            file_info = bot.get_file(photo.file_id)
+            downloaded_file = bot.download_file(file_info.file_path)
+            photo_path = save_photo_and_resize(downloaded_file, photo_guid)
+
+            # Add photo to courier_photos
+            with state.data() as data:
+                courier_photos = data.get('courier_photos', {})
+                timestamp = str(int(time.time()))
+                courier_photos[photo_path] = timestamp  # Using timestamp as a placeholder
+                data['courier_photos'] = courier_photos
+
+            # Ask if the user wants to add more photos
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("Да", callback_data="add_more_courier_photos"),
+                types.InlineKeyboardButton("Нет", callback_data="finish_courier_photos")
+            )
+            bot.send_message(chat_id, "Фото успешно добавлено. Добавить еще фото?", reply_markup=markup)
+            state.set(SaleStates.courier_photos_done)
+    except Exception as e:
+        bot.send_message(chat_id, f"Ошибка при обработке фото: {str(e)}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "skip_courier_photos")
+def skip_courier_photos(call: types.CallbackQuery, state: StateContext):
+    # Skip photos and move to total price
+    state.set(SaleStates.total_price)
+    bot.edit_message_text("Введите общую сумму для заказа:",
+                          call.message.chat.id,
+                          call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data in ["add_more_courier_photos", "finish_courier_photos"])
+def handle_courier_photos_choice(call: types.CallbackQuery, state: StateContext):
+    if call.data == "add_more_courier_photos":
+        # Stay in courier_photo state to add more photos
+        state.set(SaleStates.courier_photo)
+        bot.edit_message_text("Приложите еще фото:",
+                              call.message.chat.id,
+                              call.message.message_id)
+    else:  # finish_courier_photos
+        # Move to total price
+        state.set(SaleStates.total_price)
+        bot.edit_message_text("Введите общую сумму для заказа:",
+                              call.message.chat.id,
+                              call.message.message_id)
+
+
+def finalize_courier_order(chat_id, message_id, manager_username, state: StateContext):
+    """Финализирует заказ для SDEK, PEK, LUCH с фотографиями."""
+    with state.data() as order_data:
+        if order_data:
+            product_dict = order_data.get("product_dict", {})
+            gift = order_data.get("gift")
+            note = order_data.get("note")
+            sale_type = order_data.get("sale_type")
+            courier_photos = order_data.get("courier_photos", {})
+            delivery_sum = order_data.get("delivery_sum")
+            total_price = order_data.get("total_price")
+
+            if not all([product_dict, sale_type]):
+                bot.send_message(chat_id,
+                                 "Не хватает данных для оформления заказа. Пожалуйста, начните процесс заново.")
+                return
+
+            try:
+                manager_info = get_user_info(username=manager_username)
+                if not manager_info:
+                    bot.send_message(chat_id, "Не удалось получить информацию о менеджере.")
+                    return
+
+                manager_id = manager_info['id']
+                manager_name = manager_info['name']
+                manager_username = manager_info['username']
+
+                # Process product stock changes
+                process_product_stock(product_dict)
+                print('stock')
+                # Create the order
+                order = create_order(
+                    product_dict, gift, note, sale_type, manager_id, message_id,
+                    delivery_sum=delivery_sum, total_price=total_price,
+                    # Use courier_photos as avito_photos_tracks if there are any
+                    avito_photos_tracks=courier_photos if courier_photos else None
+                )
+                print('order',order)
+
+                order_id = order['id']
+                product_list = order['values']
+
+                # Format order message
+                order_message = format_order_message(
+                    order_id, product_list, gift, note, sale_type, manager_name, manager_username,
+                    total_price=total_price, delivery_sum=delivery_sum
+                )
+                print('order_message')
+                print(order_message)
+                # Send message to channel
+                if courier_photos:
+                    print('courier_photos')
+                    print(courier_photos)
+                    # Send photos as a group if there are any
+                    media_group = create_media_group(courier_photos.keys(), order_message)
+                    reply_messages = bot.send_media_group(chat_id=CHANNEL_CHAT_ID, media=media_group)
+                    update_order_message_id(order_id, reply_messages[0].message_id)
+                else:
+                    # Just send the text message if no photos
+                    reply_message = bot.send_message(CHANNEL_CHAT_ID, order_message)
+                    update_order_message_id(order_id, reply_message.message_id)
+
+                # Send order info to the user
+                bot.send_message(chat_id, order_message)
+
+                # Update order status to CLOSED
+                update_order_status(order_id, OrderType.CLOSED.value)
+
+                # Clean up state
+                state.delete()
+            except Exception as e:
+                bot.send_message(chat_id, f"Произошла ошибка при оформлении заказа: {str(e)}")
+        else:
+            bot.send_message(chat_id, "Произошла ошибка при оформлении заказа. Пожалуйста, попробуйте снова.")
+

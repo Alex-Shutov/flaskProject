@@ -71,6 +71,8 @@ from database import get_active_showroom_visits
 from handlers.handlers import delete_multiple_states
 from states import DirectStates
 
+from handlers.manager.sale import finalize_courier_order
+
 bot = get_bot_instance()
 
 @bot.message_handler(commands=['restart'])
@@ -1177,6 +1179,9 @@ def confirm_final_order(call: types.CallbackQuery, state: StateContext):
         finalize_avito_order(call.message.chat.id,call.message.message_id ,call.message.json['chat']['username'], state)
     elif sale_type == "delivery":
         finalize_delivery_order(call.message.chat.id,call.message.message_id ,call.message.json['chat']['username'],state)
+    elif sale_type in ['sdek', 'pek', 'luch']:
+        finalize_courier_order(call.message.chat.id, call.message.message_id, call.message.json['chat']['username'],
+                               state)
     else:
         finalize_order(call.message.chat.id, call.from_user.username, call.message.message_id, state)
 

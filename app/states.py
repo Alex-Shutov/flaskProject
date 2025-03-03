@@ -15,6 +15,8 @@ class DirectStates(StatesGroup):
     delivery_sum = State()
     viewer_selection = State()
     viewer_note = State()
+    courier_photo = State()  # For handling courier delivery photos
+    courier_photos_done = State()  # For confirming photos are done
 
 
 class AvitoStates(StatesGroup):
