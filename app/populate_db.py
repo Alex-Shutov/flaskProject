@@ -6,7 +6,8 @@ from datetime import datetime
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='Populate products and product_params tables.')
-parser.add_argument('--type_id', default=1, type=int, help='Type product ID')
+parser.add_argument('--type_id', default=None, type=int, help='Type product ID (if type_name is not provided)')
+parser.add_argument('--type_name', default=None, type=str, help='Type product name (if type_id is not provided)')
 parser.add_argument('--sale_price', default=800, type=int, help='Sale price for products')
 parser.add_argument('--avito_delivery_price', default=200, type=int, help='Avito delivery price')
 parser.add_argument('--host', default='localhost', help='Database host')
@@ -24,34 +25,44 @@ conn = psycopg2.connect(
 )
 cur = conn.cursor()
 
-# Define our product inventory with details
 products_inventory = [
-    {"name": "Тотем механика", "price": 12500, "count": 13, "type": "Тотем", "param": "механика"},
-    {"name": "Тотем гилравлика", "price": 14000, "count": 10, "type": "Тотем", "param": "гилравлика"},
-    {"name": "Тотем женский", "price": 14000, "count": 3, "type": "Тотем", "param": "женский"},
-    {"name": "Msep 26 Al", "price": 14800, "count": 7, "type": "Msep", "param": "26 Al"},
-    {"name": "SkyWay 26 BMW", "price": 10500, "count": 4, "type": "SkyWay", "param": "26 BMW"},
-    {"name": "Фэтбайк б/у", "price": 15000, "count": 1, "type": "Фэтбайк", "param": "б/у"},
-    {"name": "SkyWay 27,5", "price": 11500, "count": 1, "type": "SkyWay", "param": "27,5"},
-    {"name": "Msep 27,5 Al", "price": 15000, "count": 3, "type": "Msep", "param": "27,5 Al"},
-    {"name": "Paruisi 24", "price": 11000, "count": 9, "type": "Paruisi", "param": "24"},
-    {"name": "SkyWay 24 женский", "price": 10500, "count": 3, "type": "SkyWay", "param": "24 женский"},
-    {"name": "Green 24 складной", "price": 10500, "count": 1, "type": "Green", "param": "24 складной"},
-    {"name": "SkyWay 24", "price": 10500, "count": 5, "type": "SkyWay", "param": "24"},
-    {"name": "Msep 29", "price": 13000, "count": 4, "type": "Msep", "param": "29"},
-    {"name": "Progress 29", "price": 10000, "count": 1, "type": "Progress", "param": "29"}
+    {"name": "Sk 8", "count": 14, "type": "Sk", "param": "8"},
+    {"name": "SkyWay Panda", "count": 9, "type": "SkyWay", "param": "Panda"},
+    {"name": "SkyWay 12Ah", "count": 14, "type": "SkyWay", "param": "12Ah"},
+    {"name": "SkyWay Tank", "count": 15, "type": "SkyWay", "param": "Tank"},
+    {"name": "SkyWay 007", "count": 8, "type": "SkyWay", "param": "007"}
 ]
 
-# Filter products based on the type_id parameter
-type_query = """
-SELECT title FROM type_product WHERE id = %s
-"""
-cur.execute(type_query, (args.type_id,))
-type_result = cur.fetchone()
+# If type_name is provided, insert it into type_product table
+if args.type_name:
+    type_insert = """
+    INSERT INTO type_product (title)
+    VALUES (%s)
+    RETURNING id
+    """
+    cur.execute(type_insert, (args.type_name,))
+    type_result = cur.fetchone()
+    type_id=type_result[0]
+    print(f"Created new type_product entry with title '{args.type_name}' and ID: {type_result[0]}")
+else:
+    # If no type_name provided, use type_id from command line argument
+    if args.type_id is None:
+        print("Error: Either --type_id or --type_name must be provided")
+        sys.exit(1)
 
-if not type_result:
-    print(f"Error: No type_product found with ID {args.type_id}")
-    sys.exit(1)
+    type_id = args.type_id
+
+    # Check if the type_id exists in the database
+    type_query = """
+        SELECT title FROM type_product WHERE id = %s
+        """
+    cur.execute(type_query, (type_id,))
+    type_result = cur.fetchone()
+    print(type_result)
+    if not type_result:
+        print(f"Error: No type_product found with ID {type_id}")
+        sys.exit(1)
+
 
 product_type = type_result[0]
 
@@ -87,7 +98,7 @@ for product_type_name in unique_product_types:
         product_type_name,  # Name is just the product type (e.g., "Тотем")
         description,
         current_time,
-        args.type_id,
+        type_id,
         product_values,
         param_parameters,
         is_main_product,
